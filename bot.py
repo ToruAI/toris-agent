@@ -13,11 +13,12 @@ from datetime import datetime
 from io import BytesIO
 from pathlib import Path
 from dotenv import load_dotenv
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     MessageHandler,
+    CallbackQueryHandler,
     ContextTypes,
     filters,
 )
@@ -106,8 +107,30 @@ def should_handle_message(message_thread_id: int | None) -> bool:
     return message_thread_id == allowed_topic
 
 
-# Load system prompt at startup
-VOICE_PERSONA = load_system_prompt()
+# Base system prompt (loaded once at startup)
+BASE_SYSTEM_PROMPT = load_system_prompt()
+
+
+def build_dynamic_prompt(user_settings: dict = None) -> str:
+    """Build dynamic system prompt with current date/time and user settings."""
+    prompt = BASE_SYSTEM_PROMPT
+
+    # Inject current date and time
+    now = datetime.now()
+    timestamp_info = f"\n\nCurrent date and time: {now.strftime('%Y-%m-%d %H:%M:%S %A')}"
+    prompt = prompt + timestamp_info
+
+    # Optionally inject user settings summary
+    if user_settings:
+        settings_summary = "\n\nUser settings:"
+        if not user_settings.get("audio_enabled", True):
+            settings_summary += "\n- Audio responses disabled (text only)"
+        if user_settings.get("approval_mode", False):
+            settings_summary += "\n- Approval mode enabled (responses require user approval)"
+        if settings_summary != "\n\nUser settings:":
+            prompt = prompt + settings_summary
+
+    return prompt
 
 # Voice settings for expressive delivery
 VOICE_SETTINGS = {
@@ -123,8 +146,12 @@ elevenlabs = ElevenLabs(api_key=ELEVENLABS_API_KEY)
 # Session state per user
 user_sessions = {}  # {user_id: {"current_session": "session_id", "sessions": []}}
 
-# State file for persistence
+# User settings per user
+user_settings = {}  # {user_id: {"audio_enabled": bool, "voice_speed": float, "approval_mode": bool}}
+
+# State files for persistence
 STATE_FILE = Path(__file__).parent / "sessions_state.json"
+SETTINGS_FILE = Path(__file__).parent / "user_settings.json"
 
 
 def load_state():
@@ -141,12 +168,38 @@ def save_state():
         json.dump(user_sessions, f, indent=2)
 
 
+def load_settings():
+    """Load user settings from file."""
+    global user_settings
+    if SETTINGS_FILE.exists():
+        with open(SETTINGS_FILE) as f:
+            user_settings = json.load(f)
+
+
+def save_settings():
+    """Save user settings to file."""
+    with open(SETTINGS_FILE, "w") as f:
+        json.dump(user_settings, f, indent=2)
+
+
 def get_user_state(user_id: int) -> dict:
     """Get or create user state."""
     user_id_str = str(user_id)
     if user_id_str not in user_sessions:
         user_sessions[user_id_str] = {"current_session": None, "sessions": []}
     return user_sessions[user_id_str]
+
+
+def get_user_settings(user_id: int) -> dict:
+    """Get or create user settings with defaults."""
+    user_id_str = str(user_id)
+    if user_id_str not in user_settings:
+        user_settings[user_id_str] = {
+            "audio_enabled": True,
+            "voice_speed": VOICE_SETTINGS["speed"],  # Default from VOICE_SETTINGS
+            "approval_mode": False,
+        }
+    return user_settings[user_id_str]
 
 
 async def transcribe_voice(voice_bytes: bytes) -> str:
@@ -162,9 +215,12 @@ async def transcribe_voice(voice_bytes: bytes) -> str:
         return f"[Transcription error: {e}]"
 
 
-async def text_to_speech(text: str) -> BytesIO:
+async def text_to_speech(text: str, speed: float = None) -> BytesIO:
     """Convert text to speech using ElevenLabs Turbo v2.5 with expressive voice settings."""
     try:
+        # Use provided speed or default from VOICE_SETTINGS
+        actual_speed = speed if speed is not None else VOICE_SETTINGS["speed"]
+
         audio = elevenlabs.text_to_speech.convert(
             text=text,
             voice_id=ELEVENLABS_VOICE_ID,
@@ -174,7 +230,7 @@ async def text_to_speech(text: str) -> BytesIO:
                 "stability": VOICE_SETTINGS["stability"],
                 "similarity_boost": VOICE_SETTINGS["similarity_boost"],
                 "style": VOICE_SETTINGS["style"],
-                "speed": VOICE_SETTINGS["speed"],  # 1.25x faster delivery
+                "speed": actual_speed,
                 "use_speaker_boost": True,
             },
         )
@@ -241,7 +297,7 @@ def load_megg_context() -> str:
         return ""
 
 
-async def call_claude(prompt: str, session_id: str = None, continue_last: bool = False, include_megg: bool = True) -> tuple[str, str, dict]:
+async def call_claude(prompt: str, session_id: str = None, continue_last: bool = False, include_megg: bool = True, user_settings: dict = None) -> tuple[str, str, dict]:
     """
     Call Claude Code and return (response, session_id, metadata).
     metadata includes: cost, num_turns, duration
@@ -257,11 +313,14 @@ async def call_claude(prompt: str, session_id: str = None, continue_last: bool =
             full_prompt = f"<context>\n{megg_ctx}\n</context>\n\n{prompt}"
             debug("Prepended megg context to prompt")
 
+    # Build dynamic system prompt
+    dynamic_persona = build_dynamic_prompt(user_settings)
+
     # Build command with persona and capabilities
     cmd = [
         "claude", "-p", full_prompt,
         "--output-format", "json",
-        "--append-system-prompt", VOICE_PERSONA,
+        "--append-system-prompt", dynamic_persona,
         "--allowedTools", "Read,Grep,Glob,WebSearch,WebFetch,Task,Bash,Edit,Write,Skill",
         "--add-dir", CLAUDE_WORKING_DIR,  # Can read from anywhere in /home/dev
     ]
@@ -324,7 +383,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/continue - Resume last session\n"
         "/sessions - List all sessions\n"
         "/switch <name> - Switch to session\n"
-        "/status - Current session info"
+        "/status - Current session info\n"
+        "/settings - Configure audio, speed, approval mode"
     )
 
 
@@ -475,6 +535,141 @@ async def cmd_health(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("\n".join(status))
 
 
+async def cmd_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /settings command - show settings menu."""
+    if not should_handle_message(update.message.message_thread_id):
+        return
+
+    user_id = update.effective_user.id
+    settings = get_user_settings(user_id)
+
+    # Build settings message
+    audio_status = "ON" if settings["audio_enabled"] else "OFF"
+    approval_status = "ON" if settings["approval_mode"] else "OFF"
+    speed = settings["voice_speed"]
+
+    message = (
+        f"Current Settings:\n\n"
+        f"Audio: {audio_status}\n"
+        f"Voice Speed: {speed}x\n"
+        f"Approval Mode: {approval_status}\n"
+    )
+
+    # Build inline keyboard
+    keyboard = [
+        [InlineKeyboardButton(f"Audio: {audio_status}", callback_data="setting_audio_toggle")],
+        [
+            InlineKeyboardButton("0.8x", callback_data="setting_speed_0.8"),
+            InlineKeyboardButton("0.9x", callback_data="setting_speed_0.9"),
+            InlineKeyboardButton("1.0x", callback_data="setting_speed_1.0"),
+            InlineKeyboardButton("1.1x", callback_data="setting_speed_1.1"),
+            InlineKeyboardButton("1.2x", callback_data="setting_speed_1.2"),
+        ],
+        [InlineKeyboardButton(f"Approval Mode: {approval_status}", callback_data="setting_approval_toggle")],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await update.message.reply_text(message, reply_markup=reply_markup)
+
+
+async def handle_settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle settings button callbacks."""
+    query = update.callback_query
+    await query.answer()
+
+    user_id = update.effective_user.id
+    settings = get_user_settings(user_id)
+
+    # Parse callback data
+    callback_data = query.data
+
+    if callback_data == "setting_audio_toggle":
+        settings["audio_enabled"] = not settings["audio_enabled"]
+        save_settings()
+        status = "enabled" if settings["audio_enabled"] else "disabled"
+        await query.edit_message_text(f"Audio {status}")
+
+    elif callback_data.startswith("setting_speed_"):
+        speed = float(callback_data.replace("setting_speed_", ""))
+        settings["voice_speed"] = speed
+        save_settings()
+        await query.edit_message_text(f"Voice speed set to {speed}x")
+
+    elif callback_data == "setting_approval_toggle":
+        settings["approval_mode"] = not settings["approval_mode"]
+        save_settings()
+        status = "enabled" if settings["approval_mode"] else "disabled"
+        await query.edit_message_text(f"Approval mode {status}")
+
+    # Show updated settings menu after a short delay
+    await asyncio.sleep(1)
+    audio_status = "ON" if settings["audio_enabled"] else "OFF"
+    approval_status = "ON" if settings["approval_mode"] else "OFF"
+    speed = settings["voice_speed"]
+
+    message = (
+        f"Current Settings:\n\n"
+        f"Audio: {audio_status}\n"
+        f"Voice Speed: {speed}x\n"
+        f"Approval Mode: {approval_status}\n"
+    )
+
+    keyboard = [
+        [InlineKeyboardButton(f"Audio: {audio_status}", callback_data="setting_audio_toggle")],
+        [
+            InlineKeyboardButton("0.8x", callback_data="setting_speed_0.8"),
+            InlineKeyboardButton("0.9x", callback_data="setting_speed_0.9"),
+            InlineKeyboardButton("1.0x", callback_data="setting_speed_1.0"),
+            InlineKeyboardButton("1.1x", callback_data="setting_speed_1.1"),
+            InlineKeyboardButton("1.2x", callback_data="setting_speed_1.2"),
+        ],
+        [InlineKeyboardButton(f"Approval Mode: {approval_status}", callback_data="setting_approval_toggle")],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await query.edit_message_text(message, reply_markup=reply_markup)
+
+
+async def handle_action_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle action approval/rejection callbacks."""
+    query = update.callback_query
+    await query.answer()
+
+    callback_data = query.data
+
+    if callback_data.startswith("action_approve_"):
+        msg_id = callback_data.replace("action_approve_", "")
+        # Get pending action from context
+        pending_key = f"pending_{msg_id}"
+        if pending_key in context.user_data:
+            pending_data = context.user_data[pending_key]
+            response_text = pending_data["response"]
+            user_id = pending_data["user_id"]
+            settings = get_user_settings(user_id)
+
+            # Send audio if enabled
+            if settings["audio_enabled"]:
+                audio = await text_to_speech(response_text, speed=settings["voice_speed"])
+                if audio:
+                    await query.message.reply_voice(voice=audio)
+
+            await query.edit_message_text(f"{response_text}\n\n[Approved]")
+            # Clean up pending data
+            del context.user_data[pending_key]
+        else:
+            await query.edit_message_text("Action expired or already processed")
+
+    elif callback_data.startswith("action_reject_"):
+        msg_id = callback_data.replace("action_reject_", "")
+        pending_key = f"pending_{msg_id}"
+        if pending_key in context.user_data:
+            await query.edit_message_text("Action cancelled")
+            # Clean up pending data
+            del context.user_data[pending_key]
+        else:
+            await query.edit_message_text("Action expired or already processed")
+
+
 # ============ Voice Handler ============
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -488,6 +683,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user_id = update.effective_user.id
     state = get_user_state(user_id)
+    settings = get_user_settings(user_id)
 
     # Acknowledge receipt
     processing_msg = await update.message.reply_text("Processing voice message...")
@@ -509,12 +705,13 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Show what was heard
         await processing_msg.edit_text(f"Heard: {text[:100]}{'...' if len(text) > 100 else ''}\n\nAsking Claude...")
 
-        # Call Claude
+        # Call Claude with user settings
         continue_last = state["current_session"] is not None
         response, new_session_id, metadata = await call_claude(
             text,
             session_id=state["current_session"],
-            continue_last=continue_last
+            continue_last=continue_last,
+            user_settings=settings
         )
 
         # Update session state
@@ -524,13 +721,34 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 state["sessions"].append(new_session_id)
             save_state()
 
-        # Send text response (split if too long)
-        await send_long_message(update, processing_msg, response)
+        # Check if approval mode is enabled
+        if settings["approval_mode"]:
+            # Show response with approval buttons
+            keyboard = [
+                [
+                    InlineKeyboardButton("Approve", callback_data=f"action_approve_{processing_msg.message_id}"),
+                    InlineKeyboardButton("Reject", callback_data=f"action_reject_{processing_msg.message_id}"),
+                ]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
 
-        # Generate and send full voice response
-        audio = await text_to_speech(response)
-        if audio:
-            await update.message.reply_voice(voice=audio)
+            # Store pending action data
+            pending_key = f"pending_{processing_msg.message_id}"
+            context.user_data[pending_key] = {
+                "response": response,
+                "user_id": user_id,
+            }
+
+            await processing_msg.edit_text(response[:4000], reply_markup=reply_markup)
+        else:
+            # Send text response (split if too long)
+            await send_long_message(update, processing_msg, response)
+
+            # Generate and send voice response if audio enabled
+            if settings["audio_enabled"]:
+                audio = await text_to_speech(response, speed=settings["voice_speed"])
+                if audio:
+                    await update.message.reply_voice(voice=audio)
 
     except Exception as e:
         debug(f"Error in handle_voice: {e}")
@@ -548,6 +766,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user_id = update.effective_user.id
     state = get_user_state(user_id)
+    settings = get_user_settings(user_id)
     text = update.message.text
 
     processing_msg = await update.message.reply_text("Asking Claude...")
@@ -558,7 +777,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         response, new_session_id, metadata = await call_claude(
             text,
             session_id=state["current_session"],
-            continue_last=continue_last
+            continue_last=continue_last,
+            user_settings=settings
         )
 
         if new_session_id and new_session_id != state["current_session"]:
@@ -567,13 +787,34 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 state["sessions"].append(new_session_id)
             save_state()
 
-        # Split long responses into multiple messages
-        await send_long_message(update, processing_msg, response)
+        # Check if approval mode is enabled
+        if settings["approval_mode"]:
+            # Show response with approval buttons
+            keyboard = [
+                [
+                    InlineKeyboardButton("Approve", callback_data=f"action_approve_{processing_msg.message_id}"),
+                    InlineKeyboardButton("Reject", callback_data=f"action_reject_{processing_msg.message_id}"),
+                ]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
 
-        # Also send voice response (V always speaks)
-        audio = await text_to_speech(response)
-        if audio:
-            await update.message.reply_voice(voice=audio)
+            # Store pending action data
+            pending_key = f"pending_{processing_msg.message_id}"
+            context.user_data[pending_key] = {
+                "response": response,
+                "user_id": user_id,
+            }
+
+            await processing_msg.edit_text(response[:4000], reply_markup=reply_markup)
+        else:
+            # Split long responses into multiple messages
+            await send_long_message(update, processing_msg, response)
+
+            # Send voice response if audio enabled
+            if settings["audio_enabled"]:
+                audio = await text_to_speech(response, speed=settings["voice_speed"])
+                if audio:
+                    await update.message.reply_voice(voice=audio)
 
     except Exception as e:
         debug(f"Error in handle_text: {e}")
@@ -583,6 +824,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     """Main entry point."""
     load_state()
+    load_settings()
 
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
 
@@ -594,6 +836,11 @@ def main():
     app.add_handler(CommandHandler("switch", cmd_switch))
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(CommandHandler("health", cmd_health))
+    app.add_handler(CommandHandler("settings", cmd_settings))
+
+    # Callback handlers for inline keyboards
+    app.add_handler(CallbackQueryHandler(handle_settings_callback, pattern="^setting_"))
+    app.add_handler(CallbackQueryHandler(handle_action_callback, pattern="^action_"))
 
     # Messages
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
