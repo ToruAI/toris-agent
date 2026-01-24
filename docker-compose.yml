@@ -1,27 +1,27 @@
 # Claude Voice Assistant - Docker Compose
 #
 # Quick start:
-#   cp docker/assistant.env.example docker/assistant.env
-#   # Edit docker/assistant.env with your API keys
+#   cp docker/toris.env.example docker/toris.env
+#   # Edit docker/toris.env with your API keys
 #   docker-compose up -d
 #
 # Logs:
-#   docker-compose logs -f assistant
+#   docker-compose logs -f toris
 #
 # Multiple personas:
 #   Duplicate the service block with different env_file and volume names
 
 services:
-  assistant:
+  toris:
     build: .
-    container_name: claude-voice-assistant
+    container_name: claude-voice-toris
     env_file:
-      - docker/assistant.env
+      - docker/toris.env
     volumes:
       # Persistent state (session history, user settings)
-      - assistant-state:/home/claude/state
+      - toris-state:/home/claude/state
       # Sandbox for Claude file operations
-      - assistant-sandbox:/home/claude/sandbox
+      - toris-sandbox:/home/claude/sandbox
       # Prompts directory (read-only)
       - ./prompts:/home/claude/app/prompts:ro
     restart: unless-stopped
@@ -33,5 +33,5 @@ services:
       start_period: 40s
 
 volumes:
-  assistant-state:
-  assistant-sandbox:
+  toris-state:
+  toris-sandbox:

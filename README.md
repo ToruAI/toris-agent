@@ -92,15 +92,15 @@ Best for production deployment with automatic restarts and isolation.
 git clone https://github.com/toruai/claude-voice-assistant.git
 cd claude-voice-assistant
 
-# Configure your assistant
-cp docker/assistant.env.example docker/assistant.env
-# Edit docker/assistant.env with your API keys
+# Configure your toris
+cp docker/toris.env.example docker/toris.env
+# Edit docker/toris.env with your API keys
 
 # Start
 docker-compose up -d
 
 # View logs
-docker-compose logs -f assistant
+docker-compose logs -f toris
 
 # Stop
 docker-compose down
@@ -118,7 +118,7 @@ claude-voice-assistant/
 ├── Dockerfile
 ├── docker-compose.yml
 ├── docker/
-│   └── assistant.env  # Your config (from example.env)
+│   └── toris.env  # Your config (from example.env)
 └── prompts/           # Persona prompts
 ```
 
@@ -207,7 +207,7 @@ Run multiple AI personalities from the same codebase. Each gets its own:
 See `prompts/v.md` for a full example. Key elements:
 
 ```markdown
-You are V, a brilliant and slightly cynical voice assistant.
+You are V, a brilliant and slightly cynical voice toris.
 
 ## Your capabilities:
 - You can READ files from anywhere in {read_dir}
@@ -233,10 +233,10 @@ docker-compose build
 docker-compose up -d
 
 # View logs
-docker-compose logs -f assistant
+docker-compose logs -f toris
 
 # Restart
-docker-compose restart assistant
+docker-compose restart toris
 
 # Stop
 docker-compose down
@@ -250,7 +250,7 @@ docker-compose down -v
 Copy and edit the example environment file:
 
 ```bash
-cp docker/assistant.env.example docker/assistant.env
+cp docker/toris.env.example docker/toris.env
 ```
 
 **Key environment variables:**
@@ -268,8 +268,8 @@ Docker volumes store persistent data:
 
 | Volume | Contents | Location |
 |--------|----------|----------|
-| `assistant-state` | Session history & settings | `/home/claude/state` |
-| `assistant-sandbox` | File operations sandbox | `/home/claude/sandbox` |
+| `toris-state` | Session history & settings | `/home/claude/state` |
+| `toris-sandbox` | File operations sandbox | `/home/claude/sandbox` |
 
 **Backup state:**
 ```bash
@@ -278,7 +278,7 @@ docker cp claude-voice-assistant:/home/claude/state ./backup-state
 
 # Import session data
 docker cp ./backup-state/. claude-voice-assistant:/home/claude/state
-docker-compose restart assistant
+docker-compose restart toris
 ```
 
 ### Health Checks
