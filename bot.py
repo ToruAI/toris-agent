@@ -575,7 +575,7 @@ async def cmd_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle settings button callbacks."""
     query = update.callback_query
-    await query.answer()
+    debug(f"SETTINGS CALLBACK received: {query.data} from user {update.effective_user.id}")
 
     user_id = update.effective_user.id
     settings = get_user_settings(user_id)
@@ -586,32 +586,29 @@ async def handle_settings_callback(update: Update, context: ContextTypes.DEFAULT
     if callback_data == "setting_audio_toggle":
         settings["audio_enabled"] = not settings["audio_enabled"]
         save_settings()
-        status = "enabled" if settings["audio_enabled"] else "disabled"
-        await query.edit_message_text(f"Audio {status}")
+        debug(f"Audio toggled to: {settings['audio_enabled']}")
 
     elif callback_data.startswith("setting_speed_"):
         speed = float(callback_data.replace("setting_speed_", ""))
         settings["voice_speed"] = speed
         save_settings()
-        await query.edit_message_text(f"Voice speed set to {speed}x")
+        debug(f"Speed set to: {speed}")
 
     elif callback_data == "setting_approval_toggle":
         settings["approval_mode"] = not settings["approval_mode"]
         save_settings()
-        status = "enabled" if settings["approval_mode"] else "disabled"
-        await query.edit_message_text(f"Approval mode {status}")
+        debug(f"Approval mode toggled to: {settings['approval_mode']}")
 
-    # Show updated settings menu after a short delay
-    await asyncio.sleep(1)
+    # Build updated settings menu
     audio_status = "ON" if settings["audio_enabled"] else "OFF"
     approval_status = "ON" if settings["approval_mode"] else "OFF"
     speed = settings["voice_speed"]
 
     message = (
-        f"Current Settings:\n\n"
+        f"Settings:\n\n"
         f"Audio: {audio_status}\n"
         f"Voice Speed: {speed}x\n"
-        f"Approval Mode: {approval_status}\n"
+        f"Approval Mode: {approval_status}"
     )
 
     keyboard = [
@@ -627,7 +624,13 @@ async def handle_settings_callback(update: Update, context: ContextTypes.DEFAULT
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    await query.edit_message_text(message, reply_markup=reply_markup)
+    try:
+        await query.edit_message_text(message, reply_markup=reply_markup)
+        debug("Settings menu updated successfully")
+    except Exception as e:
+        debug(f"Error updating settings menu: {e}")
+
+    await query.answer()
 
 
 async def handle_action_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -859,7 +862,10 @@ def main():
     debug(f"Topic ID: {TOPIC_ID or 'ALL (no filter)'}")
     debug(f"System prompt: {SYSTEM_PROMPT_FILE or 'default'}")
     print(f"{PERSONA_NAME} is ready. Waiting for messages...")
-    app.run_polling(drop_pending_updates=True)
+    app.run_polling(
+        drop_pending_updates=True,
+        allowed_updates=["message", "callback_query"]
+    )
 
 
 if __name__ == "__main__":
