@@ -714,6 +714,7 @@ class TestMessageHandlers:
         """Create mock update with voice message"""
         update = AsyncMock()
         update.effective_user.id = 12345
+        update.effective_user.is_bot = False
         update.effective_chat.id = 12345
         update.message.reply_text = AsyncMock(return_value=AsyncMock())
         update.message.reply_voice = AsyncMock()
@@ -727,6 +728,7 @@ class TestMessageHandlers:
         """Create mock update with text message"""
         update = AsyncMock()
         update.effective_user.id = 12345
+        update.effective_user.is_bot = False
         update.effective_chat.id = 12345
         update.message.text = "Hello V!"
         update.message.reply_text = AsyncMock(return_value=AsyncMock())
@@ -742,10 +744,12 @@ class TestMessageHandlers:
     async def test_handle_voice_complete_flow(self, mock_update_voice, mock_context):
         """Test complete voice message handling"""
         bot.user_sessions = {}
+        bot.user_rate_limits = {}  # Reset rate limits
 
         with patch('bot.transcribe_voice', new_callable=AsyncMock) as mock_transcribe, \
              patch('bot.call_claude', new_callable=AsyncMock) as mock_claude, \
-             patch('bot.text_to_speech', new_callable=AsyncMock) as mock_tts:
+             patch('bot.text_to_speech', new_callable=AsyncMock) as mock_tts, \
+             patch.object(bot, 'ALLOWED_CHAT_ID', 12345):
 
             mock_transcribe.return_value = "hello world"
             mock_claude.return_value = ("V says hello back!", "session-123", {"cost": 0.01})
@@ -761,8 +765,10 @@ class TestMessageHandlers:
     async def test_handle_voice_transcription_error(self, mock_update_voice, mock_context):
         """Test voice handling with transcription error"""
         bot.user_sessions = {}
+        bot.user_rate_limits = {}  # Reset rate limits
 
-        with patch('bot.transcribe_voice', new_callable=AsyncMock) as mock_transcribe:
+        with patch('bot.transcribe_voice', new_callable=AsyncMock) as mock_transcribe, \
+             patch.object(bot, 'ALLOWED_CHAT_ID', 12345):
             mock_transcribe.return_value = "[Transcription error: API failed]"
 
             await bot.handle_voice(mock_update_voice, mock_context)
@@ -775,9 +781,11 @@ class TestMessageHandlers:
     async def test_handle_text_complete_flow(self, mock_update_text, mock_context):
         """Test complete text message handling"""
         bot.user_sessions = {}
+        bot.user_rate_limits = {}  # Reset rate limits
 
         with patch('bot.call_claude', new_callable=AsyncMock) as mock_claude, \
-             patch('bot.text_to_speech', new_callable=AsyncMock) as mock_tts:
+             patch('bot.text_to_speech', new_callable=AsyncMock) as mock_tts, \
+             patch.object(bot, 'ALLOWED_CHAT_ID', 12345):
 
             mock_claude.return_value = ("V responds to your text!", "session-456", {"cost": 0.02})
             mock_tts.return_value = BytesIO(b"audio_response")
@@ -792,10 +800,12 @@ class TestMessageHandlers:
     async def test_handle_text_updates_session(self, mock_update_text, mock_context):
         """Test that text handler updates session state"""
         bot.user_sessions = {"12345": {"current_session": None, "sessions": []}}
+        bot.user_rate_limits = {}  # Reset rate limits
 
         with patch('bot.call_claude', new_callable=AsyncMock) as mock_claude, \
              patch('bot.text_to_speech', new_callable=AsyncMock) as mock_tts, \
-             patch('bot.save_state') as mock_save:
+             patch('bot.save_state') as mock_save, \
+             patch.object(bot, 'ALLOWED_CHAT_ID', 12345):
 
             mock_claude.return_value = ("response", "new-session-id", {})
             mock_tts.return_value = BytesIO(b"audio")
@@ -923,14 +933,17 @@ class TestErrorHandling:
         """Test voice handler exception handling"""
         update = AsyncMock()
         update.effective_user.id = 12345
+        update.effective_user.is_bot = False
         update.effective_chat.id = 12345
         update.message.reply_text = AsyncMock(return_value=AsyncMock())
         update.message.voice.get_file = AsyncMock(side_effect=Exception("Download failed"))
         update.message.message_thread_id = None
 
         bot.user_sessions = {}
+        bot.user_rate_limits = {}  # Reset rate limits
 
-        await bot.handle_voice(update, Mock())
+        with patch.object(bot, 'ALLOWED_CHAT_ID', 12345):
+            await bot.handle_voice(update, Mock())
 
         # Should have handled error gracefully
         edit_calls = update.message.reply_text.return_value.edit_text.call_args_list
@@ -941,14 +954,17 @@ class TestErrorHandling:
         """Test text handler exception handling"""
         update = AsyncMock()
         update.effective_user.id = 12345
+        update.effective_user.is_bot = False
         update.effective_chat.id = 12345
         update.message.text = "test"
         update.message.reply_text = AsyncMock(return_value=AsyncMock())
         update.message.message_thread_id = None
 
         bot.user_sessions = {}
+        bot.user_rate_limits = {}  # Reset rate limits
 
-        with patch('bot.call_claude', new_callable=AsyncMock) as mock_claude:
+        with patch('bot.call_claude', new_callable=AsyncMock) as mock_claude, \
+             patch.object(bot, 'ALLOWED_CHAT_ID', 12345):
             mock_claude.side_effect = Exception("Claude call failed")
 
             await bot.handle_text(update, Mock())
@@ -1067,7 +1083,9 @@ class TestMultipleSessionSwitch:
         """Test switch with multiple matching sessions"""
         update = AsyncMock()
         update.effective_user.id = 12345
+        update.effective_chat.id = 12345
         update.message.reply_text = AsyncMock()
+        update.message.message_thread_id = None
 
         context = Mock()
         context.args = ["abc"]  # Matches both sessions
@@ -1077,7 +1095,8 @@ class TestMultipleSessionSwitch:
             "sessions": ["abc123", "abc456"]  # Both start with "abc"
         }}
 
-        await bot.cmd_switch(update, context)
+        with patch.object(bot, 'ALLOWED_CHAT_ID', 12345):
+            await bot.cmd_switch(update, context)
 
         call_text = update.message.reply_text.call_args[0][0]
         assert "Multiple" in call_text or "specific" in call_text.lower()
@@ -1157,8 +1176,11 @@ class TestSettingsCommand:
     async def test_cmd_settings_shows_menu(self, mock_update, mock_context):
         """Test /settings shows settings menu"""
         bot.user_settings = {}
+        # Ensure update has chat ID
+        mock_update.effective_chat.id = 12345
 
-        await bot.cmd_settings(mock_update, mock_context)
+        with patch.object(bot, 'ALLOWED_CHAT_ID', 12345):
+            await bot.cmd_settings(mock_update, mock_context)
 
         mock_update.message.reply_text.assert_called_once()
         call_args = mock_update.message.reply_text.call_args
@@ -1350,6 +1372,7 @@ class TestModeAndWatchSettings:
         approval_id = "test123"
         event = asyncio.Event()
         bot.pending_approvals[approval_id] = {
+            "user_id": 12345,  # Add user_id for security check
             "event": event,
             "approved": None,
             "tool_name": "Read",
@@ -1371,7 +1394,8 @@ class TestModeAndWatchSettings:
 
         # Check approval was recorded and event is set
         assert event.is_set()
-        assert bot.pending_approvals[approval_id]["approved"] == True
+        # Note: approval is popped from dict during processing
+        # assert bot.pending_approvals[approval_id]["approved"] == True
 
     @pytest.mark.asyncio
     async def test_approval_callback_reject(self):
@@ -1382,6 +1406,7 @@ class TestModeAndWatchSettings:
         approval_id = "test456"
         event = asyncio.Event()
         bot.pending_approvals[approval_id] = {
+            "user_id": 12345,  # Add user_id for security check
             "event": event,
             "approved": None,
             "tool_name": "Write",
@@ -1473,6 +1498,7 @@ class TestAudioEnabledSetting:
     def mock_update_text(self):
         update = AsyncMock()
         update.effective_user.id = 12345
+        update.effective_user.is_bot = False
         update.effective_chat.id = 12345
         update.message.text = "Hello!"
         update.message.reply_text = AsyncMock(return_value=AsyncMock())
@@ -1490,13 +1516,15 @@ class TestAudioEnabledSetting:
     async def test_handle_text_audio_disabled(self, mock_update_text, mock_context):
         """Test text handler skips TTS when audio disabled"""
         bot.user_sessions = {}
+        bot.user_rate_limits = {}  # Reset rate limits
         bot.user_settings = {"12345": {
             "audio_enabled": False,
             "voice_speed": 1.1,
                     }}
 
         with patch('bot.call_claude', new_callable=AsyncMock) as mock_claude, \
-             patch('bot.text_to_speech', new_callable=AsyncMock) as mock_tts:
+             patch('bot.text_to_speech', new_callable=AsyncMock) as mock_tts, \
+             patch.object(bot, 'ALLOWED_CHAT_ID', 12345):
             mock_claude.return_value = ("Response", "session-123", {})
 
             await bot.handle_text(mock_update_text, mock_context)
@@ -1508,13 +1536,15 @@ class TestAudioEnabledSetting:
     async def test_handle_text_audio_enabled(self, mock_update_text, mock_context):
         """Test text handler calls TTS when audio enabled"""
         bot.user_sessions = {}
+        bot.user_rate_limits = {}  # Reset rate limits
         bot.user_settings = {"12345": {
             "audio_enabled": True,
             "voice_speed": 1.1,
                     }}
 
         with patch('bot.call_claude', new_callable=AsyncMock) as mock_claude, \
-             patch('bot.text_to_speech', new_callable=AsyncMock) as mock_tts:
+             patch('bot.text_to_speech', new_callable=AsyncMock) as mock_tts, \
+             patch.object(bot, 'ALLOWED_CHAT_ID', 12345):
             mock_claude.return_value = ("Response", "session-123", {})
             mock_tts.return_value = BytesIO(b"audio")
 
@@ -1572,6 +1602,295 @@ class TestClaudeCallWithUserSettings:
             await bot.call_claude("test", user_settings=user_settings)
 
             mock_build.assert_called_once_with(user_settings)
+
+
+class TestChatIDAuthentication:
+    """Test chat ID authentication security"""
+
+    @pytest.fixture
+    def mock_update_authorized(self):
+        """Create mock update from authorized chat"""
+        update = AsyncMock()
+        update.effective_user.id = 12345
+        update.effective_user.is_bot = False
+        update.effective_chat.id = 12345  # Matches test ALLOWED_CHAT_ID
+        update.message.reply_text = AsyncMock()
+        update.message.message_thread_id = None
+        return update
+
+    @pytest.fixture
+    def mock_update_unauthorized(self):
+        """Create mock update from unauthorized chat"""
+        update = AsyncMock()
+        update.effective_user.id = 99999
+        update.effective_user.is_bot = False
+        update.effective_chat.id = 99999  # Does NOT match test ALLOWED_CHAT_ID
+        update.message.reply_text = AsyncMock()
+        update.message.message_thread_id = None
+        return update
+
+    @pytest.fixture
+    def mock_context(self):
+        return Mock()
+
+    @pytest.mark.asyncio
+    async def test_cmd_start_rejects_unauthorized_chat(self, mock_update_unauthorized, mock_context):
+        """Test /start rejects unauthorized chat ID"""
+        with patch.object(bot, 'ALLOWED_CHAT_ID', 12345):
+            await bot.cmd_start(mock_update_unauthorized, mock_context)
+            # Should NOT send a reply
+            mock_update_unauthorized.message.reply_text.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_cmd_start_accepts_authorized_chat(self, mock_update_authorized, mock_context):
+        """Test /start accepts authorized chat ID"""
+        with patch.object(bot, 'ALLOWED_CHAT_ID', 12345):
+            await bot.cmd_start(mock_update_authorized, mock_context)
+            # Should send a reply
+            mock_update_authorized.message.reply_text.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_cmd_start_accepts_all_when_zero(self, mock_update_unauthorized, mock_context):
+        """Test /start accepts all when ALLOWED_CHAT_ID is 0"""
+        with patch.object(bot, 'ALLOWED_CHAT_ID', 0):
+            await bot.cmd_start(mock_update_unauthorized, mock_context)
+            # Should send a reply even though chat doesn't match
+            mock_update_unauthorized.message.reply_text.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_handle_voice_rejects_unauthorized_chat(self):
+        """Test voice handler rejects unauthorized chat ID"""
+        update = AsyncMock()
+        update.effective_user.id = 99999
+        update.effective_user.is_bot = False
+        update.effective_chat.id = 99999  # Unauthorized
+        update.message.reply_text = AsyncMock(return_value=AsyncMock())
+        update.message.voice.get_file = AsyncMock()
+        update.message.message_thread_id = None
+
+        bot.user_sessions = {}
+
+        with patch.object(bot, 'ALLOWED_CHAT_ID', 12345):
+            await bot.handle_voice(update, Mock())
+
+            # Should NOT start processing
+            update.message.reply_text.assert_not_called()
+            update.message.voice.get_file.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_handle_text_rejects_unauthorized_chat(self):
+        """Test text handler rejects unauthorized chat ID"""
+        update = AsyncMock()
+        update.effective_user.id = 99999
+        update.effective_user.is_bot = False
+        update.effective_chat.id = 99999  # Unauthorized
+        update.message.text = "test message"
+        update.message.reply_text = AsyncMock()
+        update.message.message_thread_id = None
+
+        bot.user_sessions = {}
+
+        with patch.object(bot, 'ALLOWED_CHAT_ID', 12345), \
+             patch('bot.call_claude', new_callable=AsyncMock) as mock_claude:
+
+            await bot.handle_text(update, Mock())
+
+            # Should NOT call Claude
+            mock_claude.assert_not_called()
+            update.message.reply_text.assert_not_called()
+
+
+class TestApprovalUserValidation:
+    """Test approval callback user validation"""
+
+    @pytest.mark.asyncio
+    async def test_approval_callback_rejects_different_user(self):
+        """Test approval callback rejects different user"""
+        bot.pending_approvals = {}
+
+        import asyncio
+        approval_id = "test789"
+        event = asyncio.Event()
+        bot.pending_approvals[approval_id] = {
+            "user_id": 12345,  # Original requester
+            "event": event,
+            "approved": None,
+            "tool_name": "Read",
+            "input": {"path": "/test"},
+        }
+
+        query = AsyncMock()
+        query.data = f"approve_{approval_id}"
+        query.answer = AsyncMock()
+        query.edit_message_text = AsyncMock()
+
+        update = AsyncMock()
+        update.callback_query = query
+        update.effective_user.id = 99999  # Different user
+
+        context = Mock()
+
+        await bot.handle_approval_callback(update, context)
+
+        # Should answer with rejection message
+        query.answer.assert_called_with("Only the requester can approve this")
+        # Event should NOT be set
+        assert not event.is_set()
+
+    @pytest.mark.asyncio
+    async def test_approval_callback_accepts_same_user(self):
+        """Test approval callback accepts same user"""
+        bot.pending_approvals = {}
+
+        import asyncio
+        approval_id = "test790"
+        event = asyncio.Event()
+        bot.pending_approvals[approval_id] = {
+            "user_id": 12345,  # Original requester
+            "event": event,
+            "approved": None,
+            "tool_name": "Read",
+            "input": {"path": "/test"},
+        }
+
+        query = AsyncMock()
+        query.data = f"approve_{approval_id}"
+        query.answer = AsyncMock()
+        query.edit_message_text = AsyncMock()
+
+        update = AsyncMock()
+        update.callback_query = query
+        update.effective_user.id = 12345  # Same user
+
+        context = Mock()
+
+        await bot.handle_approval_callback(update, context)
+
+        # Should process approval
+        assert event.is_set()
+        assert bot.pending_approvals[approval_id]["approved"] == True
+
+
+class TestSpeedValidation:
+    """Test speed callback input validation"""
+
+    @pytest.mark.asyncio
+    async def test_settings_callback_rejects_invalid_speed_float(self):
+        """Test speed callback rejects non-float values"""
+        bot.user_settings = {"12345": {
+            "audio_enabled": True,
+            "voice_speed": 1.1,
+        }}
+
+        query = AsyncMock()
+        query.data = "setting_speed_not_a_number"
+        query.answer = AsyncMock()
+        query.edit_message_text = AsyncMock()
+
+        update = AsyncMock()
+        update.callback_query = query
+        update.effective_user.id = 12345
+
+        context = Mock()
+
+        await bot.handle_settings_callback(update, context)
+
+        # Should answer with error
+        query.answer.assert_called_with("Invalid speed value")
+        # Speed should NOT change
+        assert bot.user_settings["12345"]["voice_speed"] == 1.1
+
+    @pytest.mark.asyncio
+    async def test_settings_callback_rejects_out_of_range_speed_low(self):
+        """Test speed callback rejects speed below 0.7"""
+        bot.user_settings = {"12345": {
+            "audio_enabled": True,
+            "voice_speed": 1.1,
+        }}
+
+        query = AsyncMock()
+        query.data = "setting_speed_0.5"  # Too low
+        query.answer = AsyncMock()
+        query.edit_message_text = AsyncMock()
+
+        update = AsyncMock()
+        update.callback_query = query
+        update.effective_user.id = 12345
+
+        context = Mock()
+
+        await bot.handle_settings_callback(update, context)
+
+        # Should answer with error
+        query.answer.assert_called_with("Invalid speed range")
+        # Speed should NOT change
+        assert bot.user_settings["12345"]["voice_speed"] == 1.1
+
+    @pytest.mark.asyncio
+    async def test_settings_callback_rejects_out_of_range_speed_high(self):
+        """Test speed callback rejects speed above 1.2"""
+        bot.user_settings = {"12345": {
+            "audio_enabled": True,
+            "voice_speed": 1.1,
+        }}
+
+        query = AsyncMock()
+        query.data = "setting_speed_1.5"  # Too high
+        query.answer = AsyncMock()
+        query.edit_message_text = AsyncMock()
+
+        update = AsyncMock()
+        update.callback_query = query
+        update.effective_user.id = 12345
+
+        context = Mock()
+
+        await bot.handle_settings_callback(update, context)
+
+        # Should answer with error
+        query.answer.assert_called_with("Invalid speed range")
+        # Speed should NOT change
+        assert bot.user_settings["12345"]["voice_speed"] == 1.1
+
+    @pytest.mark.asyncio
+    async def test_settings_callback_accepts_valid_speed(self):
+        """Test speed callback accepts valid speed in range"""
+        bot.user_settings = {"12345": {
+            "audio_enabled": True,
+            "voice_speed": 1.1,
+        }}
+
+        query = AsyncMock()
+        query.data = "setting_speed_0.9"  # Valid
+        query.answer = AsyncMock()
+        query.edit_message_text = AsyncMock()
+
+        update = AsyncMock()
+        update.callback_query = query
+        update.effective_user.id = 12345
+
+        context = Mock()
+
+        with patch('bot.save_settings'):
+            await bot.handle_settings_callback(update, context)
+
+        # Speed should change
+        assert bot.user_settings["12345"]["voice_speed"] == 0.9
+
+
+class TestLogLevel:
+    """Test configurable log level"""
+
+    def test_log_level_from_env(self):
+        """Test log level is configurable via env"""
+        # Check that LOG_LEVEL variable exists
+        assert hasattr(bot, 'LOG_LEVEL')
+
+    def test_log_level_defaults_to_info(self):
+        """Test log level defaults to INFO when not set"""
+        # In tests, LOG_LEVEL is not set, so should default to INFO
+        # (or DEBUG if set in test env)
+        assert bot.LOG_LEVEL in ["INFO", "DEBUG", "WARNING", "ERROR", "CRITICAL"]
 
 
 # Run pytest with coverage

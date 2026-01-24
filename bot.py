@@ -70,14 +70,15 @@ def validate_environment():
         exit(1)
 
     if chat_id == "0":
-        print("WARNING: TELEGRAM_DEFAULT_CHAT_ID is 0 - bot will reject all messages")
-        print("         Set this to your chat ID to allow messages")
+        print("WARNING: TELEGRAM_DEFAULT_CHAT_ID is 0 - bot will accept all messages")
+        print("         Set this to your chat ID to restrict access")
 
 
-# Setup logging
+# Setup logging with configurable level
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.DEBUG
+    level=getattr(logging, LOG_LEVEL.upper(), logging.INFO)
 )
 logger = logging.getLogger(__name__)
 
@@ -467,8 +468,9 @@ async def call_claude(
         current_approval_id = str(uuid.uuid4())[:8]
         approval_event = asyncio.Event()
 
-        # Store pending approval
+        # Store pending approval with requesting user_id
         pending_approvals[current_approval_id] = {
+            "user_id": update.effective_user.id,
             "event": approval_event,
             "approved": None,
             "tool_name": tool_name,
@@ -608,6 +610,11 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /start command."""
     if not should_handle_message(update.message.message_thread_id):
         return
+
+    # Chat ID authentication
+    if ALLOWED_CHAT_ID != 0 and update.effective_chat.id != ALLOWED_CHAT_ID:
+        return  # Silently ignore unauthorized chats
+
     await update.message.reply_text(
         "Claude Voice Assistant\n\n"
         "Send me a voice message and I'll process it with Claude.\n\n"
@@ -625,6 +632,11 @@ async def cmd_new(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /new command - start new session."""
     if not should_handle_message(update.message.message_thread_id):
         return
+
+    # Chat ID authentication
+    if ALLOWED_CHAT_ID != 0 and update.effective_chat.id != ALLOWED_CHAT_ID:
+        return  # Silently ignore unauthorized chats
+
     user_id = update.effective_user.id
     state = get_user_state(user_id)
 
@@ -643,6 +655,11 @@ async def cmd_continue(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /continue command - resume last session."""
     if not should_handle_message(update.message.message_thread_id):
         return
+
+    # Chat ID authentication
+    if ALLOWED_CHAT_ID != 0 and update.effective_chat.id != ALLOWED_CHAT_ID:
+        return  # Silently ignore unauthorized chats
+
     user_id = update.effective_user.id
     state = get_user_state(user_id)
 
@@ -656,6 +673,11 @@ async def cmd_sessions(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /sessions command - list all sessions."""
     if not should_handle_message(update.message.message_thread_id):
         return
+
+    # Chat ID authentication
+    if ALLOWED_CHAT_ID != 0 and update.effective_chat.id != ALLOWED_CHAT_ID:
+        return  # Silently ignore unauthorized chats
+
     user_id = update.effective_user.id
     state = get_user_state(user_id)
 
@@ -675,6 +697,11 @@ async def cmd_switch(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /switch command - switch to specific session."""
     if not should_handle_message(update.message.message_thread_id):
         return
+
+    # Chat ID authentication
+    if ALLOWED_CHAT_ID != 0 and update.effective_chat.id != ALLOWED_CHAT_ID:
+        return  # Silently ignore unauthorized chats
+
     if not context.args:
         await update.message.reply_text("Usage: /switch <session_id>")
         return
@@ -700,6 +727,11 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /status command - show current session info."""
     if not should_handle_message(update.message.message_thread_id):
         return
+
+    # Chat ID authentication
+    if ALLOWED_CHAT_ID != 0 and update.effective_chat.id != ALLOWED_CHAT_ID:
+        return  # Silently ignore unauthorized chats
+
     debug(f"STATUS command from user {update.effective_user.id}")
     user_id = update.effective_user.id
     state = get_user_state(user_id)
@@ -717,6 +749,11 @@ async def cmd_health(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /health command - check all systems."""
     if not should_handle_message(update.message.message_thread_id):
         return
+
+    # Chat ID authentication
+    if ALLOWED_CHAT_ID != 0 and update.effective_chat.id != ALLOWED_CHAT_ID:
+        return  # Silently ignore unauthorized chats
+
     debug(f"HEALTH command from user {update.effective_user.id}, chat {update.effective_chat.id}, topic {update.message.message_thread_id}")
 
     status = []
@@ -772,6 +809,10 @@ async def cmd_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /settings command - show settings menu."""
     if not should_handle_message(update.message.message_thread_id):
         return
+
+    # Chat ID authentication
+    if ALLOWED_CHAT_ID != 0 and update.effective_chat.id != ALLOWED_CHAT_ID:
+        return  # Silently ignore unauthorized chats
 
     user_id = update.effective_user.id
     settings = get_user_settings(user_id)
@@ -837,7 +878,15 @@ async def handle_settings_callback(update: Update, context: ContextTypes.DEFAULT
         debug(f"Watch toggled to: {settings['watch_enabled']}")
 
     elif callback_data.startswith("setting_speed_"):
-        speed = float(callback_data.replace("setting_speed_", ""))
+        try:
+            speed = float(callback_data.replace("setting_speed_", ""))
+            if not 0.7 <= speed <= 1.2:
+                await query.answer("Invalid speed range")
+                return
+        except ValueError:
+            await query.answer("Invalid speed value")
+            return
+
         settings["voice_speed"] = speed
         save_settings()
         debug(f"Speed set to: {speed}")
@@ -889,6 +938,11 @@ async def handle_approval_callback(update: Update, context: ContextTypes.DEFAULT
         approval_id = callback_data.replace("approve_", "")
         debug(f">>> Looking for approval_id: {approval_id} in {list(pending_approvals.keys())}")
         if approval_id in pending_approvals:
+            # Verify that the user clicking is the one who requested
+            if update.effective_user.id != pending_approvals[approval_id].get("user_id"):
+                await query.answer("Only the requester can approve this")
+                return
+
             tool_name = pending_approvals[approval_id]["tool_name"]
             pending_approvals[approval_id]["approved"] = True
             debug(f">>> Setting event for {approval_id}")
@@ -903,6 +957,11 @@ async def handle_approval_callback(update: Update, context: ContextTypes.DEFAULT
         approval_id = callback_data.replace("reject_", "")
         debug(f">>> Looking for approval_id: {approval_id} in {list(pending_approvals.keys())}")
         if approval_id in pending_approvals:
+            # Verify that the user clicking is the one who requested
+            if update.effective_user.id != pending_approvals[approval_id].get("user_id"):
+                await query.answer("Only the requester can reject this")
+                return
+
             tool_name = pending_approvals[approval_id]["tool_name"]
             pending_approvals[approval_id]["approved"] = False
             debug(f">>> Setting event for {approval_id} (reject)")
@@ -928,6 +987,10 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not should_handle_message(update.message.message_thread_id):
         debug(f"Ignoring voice message - not in our topic (configured: {TOPIC_ID})")
         return
+
+    # Chat ID authentication
+    if ALLOWED_CHAT_ID != 0 and update.effective_chat.id != ALLOWED_CHAT_ID:
+        return  # Silently ignore unauthorized chats
 
     user_id = update.effective_user.id
 
@@ -1004,6 +1067,10 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not should_handle_message(update.message.message_thread_id):
         debug(f"Ignoring text message - not in our topic (configured: {TOPIC_ID})")
         return
+
+    # Chat ID authentication
+    if ALLOWED_CHAT_ID != 0 and update.effective_chat.id != ALLOWED_CHAT_ID:
+        return  # Silently ignore unauthorized chats
 
     user_id = update.effective_user.id
 
