@@ -174,8 +174,8 @@ See [Systemd Deployment Guide](#systemd-deployment-guide) for production setup.
 | `SYSTEM_PROMPT_FILE` | - | Path to persona prompt file |
 | `ELEVENLABS_VOICE_ID` | `JBFqnCBsd6RMkjVDRZzb` | ElevenLabs voice (George) |
 | `TELEGRAM_TOPIC_ID` | - | Filter to specific forum topic |
-| `CLAUDE_WORKING_DIR` | `/home/dev` | Directory Claude can read from |
-| `CLAUDE_SANDBOX_DIR` | `/home/dev/claude-voice-sandbox` | Directory Claude can write to |
+| `CLAUDE_WORKING_DIR` | `/home/youruser` | Directory Claude can read from |
+| `CLAUDE_SANDBOX_DIR` | `/home/youruser/claude-voice-sandbox` | Directory Claude can write to |
 | `MAX_VOICE_RESPONSE_CHARS` | `500` | Max characters for TTS |
 
 ## User Settings
@@ -198,7 +198,7 @@ Run multiple AI personalities from the same codebase. Each gets its own:
 ### Directory Structure
 
 ```
-/home/dev/voice-agents/
+/home/youruser/voice-agents/
 ├── v.env              # V persona config
 ├── tc.env             # TC persona config
 └── sandboxes/
