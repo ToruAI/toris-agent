@@ -1,4 +1,4 @@
-# Claude Voice Assistant
+# TORIS Claude Voice Assistant
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
@@ -89,8 +89,8 @@ Best for production deployment with automatic restarts and isolation.
 **Quick Start:**
 ```bash
 # Clone the repository
-git clone https://github.com/toruai/claude-voice-assistant.git
-cd claude-voice-assistant
+git clone https://github.com/toruai/toris-claude-voice-assistant.git
+cd toris-claude-voice-assistant
 
 # Configure your toris
 cp docker/toris.env.example docker/toris.env
@@ -114,7 +114,7 @@ docker-compose down
 
 **Directory Structure:**
 ```
-claude-voice-assistant/
+toris-claude-voice-assistant/
 ├── Dockerfile
 ├── docker-compose.yml
 ├── docker/
@@ -131,8 +131,8 @@ Best for development or single-persona deployments on Linux.
 **Quick Start:**
 ```bash
 # Clone and setup
-git clone https://github.com/toruai/claude-voice-assistant.git
-cd claude-voice-assistant
+git clone https://github.com/toruai/toris-claude-voice-assistant.git
+cd toris-claude-voice-assistant
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
@@ -274,10 +274,10 @@ Docker volumes store persistent data:
 **Backup state:**
 ```bash
 # Export session data
-docker cp claude-voice-assistant:/home/claude/state ./backup-state
+docker cp toris-claude-voice-assistant:/home/claude/state ./backup-state
 
 # Import session data
-docker cp ./backup-state/. claude-voice-assistant:/home/claude/state
+docker cp ./backup-state/. toris-claude-voice-assistant:/home/claude/state
 docker-compose restart toris
 ```
 
@@ -303,11 +303,11 @@ For non-Docker production deployments on Linux.
 
 ```bash
 # Create deployment directory
-mkdir -p /opt/claude-voice-assistant
-cd /opt/claude-voice-assistant
+mkdir -p /opt/toris-claude-voice-assistant
+cd /opt/toris-claude-voice-assistant
 
 # Clone and install
-git clone https://github.com/toruai/claude-voice-assistant.git .
+git clone https://github.com/toruai/toris-claude-voice-assistant.git .
 python3.12 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 
@@ -333,9 +333,9 @@ After=network.target
 Type=simple
 User=claude
 Group=claude
-WorkingDirectory=/opt/claude-voice-assistant
+WorkingDirectory=/opt/toris-claude-voice-assistant
 EnvironmentFile=/etc/claude-voice/v.env
-ExecStart=/opt/claude-voice-assistant/.venv/bin/python bot.py
+ExecStart=/opt/toris-claude-voice-assistant/.venv/bin/python bot.py
 Restart=always
 RestartSec=10
 
