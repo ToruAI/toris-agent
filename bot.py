@@ -442,8 +442,20 @@ async def call_claude(
     metadata = {}
     tool_count = 0
 
+    # Create async prompt generator for streaming mode (required for can_use_tool)
+    async def prompt_stream():
+        yield {
+            "type": "user",
+            "message": {"role": "user", "content": full_prompt},
+            "parent_tool_use_id": None,
+            "session_id": "default"
+        }
+
+    # Use streaming mode if approve mode is enabled (required for can_use_tool)
+    prompt_input = prompt_stream() if mode == "approve" else full_prompt
+
     try:
-        async for message in claude_query(prompt=full_prompt, options=options):
+        async for message in claude_query(prompt=prompt_input, options=options):
             # Handle different message types
             if isinstance(message, AssistantMessage):
                 for block in message.content:
