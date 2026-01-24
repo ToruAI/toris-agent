@@ -42,6 +42,38 @@ from claude_agent_sdk.types import (
 
 load_dotenv()
 
+
+def validate_environment():
+    """Validate required environment variables on startup."""
+    required = {
+        "TELEGRAM_BOT_TOKEN": "Telegram bot token from @BotFather",
+        "ELEVENLABS_API_KEY": "ElevenLabs API key from elevenlabs.io",
+    }
+
+    missing = []
+    for var, description in required.items():
+        if not os.getenv(var):
+            missing.append(f"  - {var}: {description}")
+
+    if missing:
+        print("ERROR: Missing required environment variables:")
+        print("\n".join(missing))
+        print("\nCopy .env.example to .env and fill in the values.")
+        exit(1)
+
+    # Validate TELEGRAM_DEFAULT_CHAT_ID is a valid integer
+    chat_id = os.getenv("TELEGRAM_DEFAULT_CHAT_ID", "0")
+    try:
+        int(chat_id)
+    except ValueError:
+        print(f"ERROR: TELEGRAM_DEFAULT_CHAT_ID must be a number, got: {chat_id}")
+        exit(1)
+
+    if chat_id == "0":
+        print("WARNING: TELEGRAM_DEFAULT_CHAT_ID is 0 - bot will reject all messages")
+        print("         Set this to your chat ID to allow messages")
+
+
 # Setup logging
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -159,6 +191,53 @@ user_sessions = {}  # {user_id: {"current_session": "session_id", "sessions": []
 
 # User settings per user
 user_settings = {}  # {user_id: {"audio_enabled": bool, "voice_speed": float, "mode": str, "watch_enabled": bool}}
+
+# Rate limiting
+RATE_LIMIT_SECONDS = 2  # Minimum seconds between messages per user
+RATE_LIMIT_PER_MINUTE = 10  # Max messages per minute per user
+user_rate_limits = {}  # {user_id: {"last_message": timestamp, "minute_count": int, "minute_start": timestamp}}
+
+
+def check_rate_limit(user_id: int) -> tuple[bool, str]:
+    """
+    Check if user is within rate limits.
+    Returns (allowed, message) - if not allowed, message explains why.
+    """
+    import time
+
+    now = time.time()
+    user_id_str = str(user_id)
+
+    if user_id_str not in user_rate_limits:
+        user_rate_limits[user_id_str] = {
+            "last_message": 0,
+            "minute_count": 0,
+            "minute_start": now,
+        }
+
+    limits = user_rate_limits[user_id_str]
+
+    # Check per-message cooldown
+    time_since_last = now - limits["last_message"]
+    if time_since_last < RATE_LIMIT_SECONDS:
+        wait_time = RATE_LIMIT_SECONDS - time_since_last
+        return False, f"Please wait {wait_time:.1f}s before sending another message."
+
+    # Check per-minute limit
+    if now - limits["minute_start"] > 60:
+        # Reset minute counter
+        limits["minute_start"] = now
+        limits["minute_count"] = 0
+
+    if limits["minute_count"] >= RATE_LIMIT_PER_MINUTE:
+        return False, f"Rate limit reached ({RATE_LIMIT_PER_MINUTE}/min). Please wait."
+
+    # Update limits
+    limits["last_message"] = now
+    limits["minute_count"] += 1
+
+    return True, ""
+
 
 # Pending tool approvals: {approval_id: {"event": asyncio.Event, "approved": bool, "tool_name": str, "input": dict}}
 pending_approvals = {}
@@ -851,6 +930,13 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     user_id = update.effective_user.id
+
+    # Rate limiting
+    allowed, rate_msg = check_rate_limit(user_id)
+    if not allowed:
+        await update.message.reply_text(rate_msg)
+        return
+
     state = get_user_state(user_id)
     settings = get_user_settings(user_id)
 
@@ -920,6 +1006,13 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     user_id = update.effective_user.id
+
+    # Rate limiting
+    allowed, rate_msg = check_rate_limit(user_id)
+    if not allowed:
+        await update.message.reply_text(rate_msg)
+        return
+
     state = get_user_state(user_id)
     settings = get_user_settings(user_id)
     text = update.message.text
@@ -960,6 +1053,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     """Main entry point."""
+    validate_environment()
     load_state()
     load_settings()
 
