@@ -778,7 +778,7 @@ async def cmd_health(update: Update, context: ContextTypes.DEFAULT_TYPE):
             capture_output=True,
             text=True,
             timeout=30,
-            cwd="/home/dev"
+            cwd=CLAUDE_WORKING_DIR
         )
         if result.returncode == 0:
             status.append("Claude Code: OK")
