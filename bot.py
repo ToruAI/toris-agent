@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Claude Voice Assistant - Telegram Bot
-Voice messages -> ElevenLabs Scribe -> Claude Code -> ElevenLabs TTS -> Voice response
+Voice messages -> ElevenLabs Scribe -> Claude Code SDK -> ElevenLabs TTS -> Voice response
 """
 
 import os
@@ -23,6 +23,21 @@ from telegram.ext import (
     filters,
 )
 from elevenlabs.client import ElevenLabs
+
+# Claude Code SDK
+from claude_code_sdk import (
+    query as claude_query,
+    ClaudeCodeOptions,
+    PermissionResultAllow,
+    PermissionResultDeny,
+)
+from claude_code_sdk.types import (
+    AssistantMessage,
+    ResultMessage,
+    TextBlock,
+    ToolUseBlock,
+    ToolResultBlock,
+)
 
 load_dotenv()
 
@@ -142,7 +157,10 @@ elevenlabs = ElevenLabs(api_key=ELEVENLABS_API_KEY)
 user_sessions = {}  # {user_id: {"current_session": "session_id", "sessions": []}}
 
 # User settings per user
-user_settings = {}  # {user_id: {"audio_enabled": bool, "voice_speed": float, "approval_mode": bool}}
+user_settings = {}  # {user_id: {"audio_enabled": bool, "voice_speed": float, "mode": str, "watch_enabled": bool}}
+
+# Pending tool approvals: {approval_id: {"event": asyncio.Event, "approved": bool, "tool_name": str, "input": dict}}
+pending_approvals = {}
 
 # State files for persistence
 STATE_FILE = Path(__file__).parent / "sessions_state.json"
@@ -191,8 +209,16 @@ def get_user_settings(user_id: int) -> dict:
     if user_id_str not in user_settings:
         user_settings[user_id_str] = {
             "audio_enabled": True,
-            "voice_speed": VOICE_SETTINGS["speed"],  # Default from VOICE_SETTINGS
+            "voice_speed": VOICE_SETTINGS["speed"],
+            "mode": "go_all",  # "go_all" or "approve"
+            "watch_enabled": False,  # Stream tool calls to Telegram
         }
+    else:
+        # Ensure new settings exist for existing users
+        if "mode" not in user_settings[user_id_str]:
+            user_settings[user_id_str]["mode"] = "go_all"
+        if "watch_enabled" not in user_settings[user_id_str]:
+            user_settings[user_id_str]["watch_enabled"] = False
     return user_settings[user_id_str]
 
 
@@ -291,15 +317,39 @@ def load_megg_context() -> str:
         return ""
 
 
-async def call_claude(prompt: str, session_id: str = None, continue_last: bool = False, include_megg: bool = True, user_settings: dict = None) -> tuple[str, str, dict]:
+def format_tool_call(tool_name: str, tool_input: dict) -> str:
+    """Format a tool call for display in Telegram."""
+    # Truncate long inputs
+    input_str = json.dumps(tool_input, indent=2)
+    if len(input_str) > 500:
+        input_str = input_str[:500] + "..."
+    return f"Tool: {tool_name}\n```\n{input_str}\n```"
+
+
+async def call_claude(
+    prompt: str,
+    session_id: str = None,
+    continue_last: bool = False,
+    include_megg: bool = True,
+    user_settings: dict = None,
+    update: Update = None,
+    context: ContextTypes.DEFAULT_TYPE = None,
+) -> tuple[str, str, dict]:
     """
-    Call Claude Code and return (response, session_id, metadata).
+    Call Claude Code SDK and return (response, session_id, metadata).
     metadata includes: cost, num_turns, duration
+
+    If update/context provided and watch_enabled, streams tool calls to Telegram.
+    If mode == "approve", waits for user approval before each tool.
     """
+    settings = user_settings or {}
+    watch_enabled = settings.get("watch_enabled", False)
+    mode = settings.get("mode", "go_all")
+
     # Ensure sandbox exists
     Path(SANDBOX_DIR).mkdir(parents=True, exist_ok=True)
 
-    # Load megg context for new sessions (like the hook does)
+    # Load megg context for new sessions
     full_prompt = prompt
     if include_megg and not continue_last and not session_id:
         megg_ctx = load_megg_context()
@@ -310,56 +360,123 @@ async def call_claude(prompt: str, session_id: str = None, continue_last: bool =
     # Build dynamic system prompt
     dynamic_persona = build_dynamic_prompt(user_settings)
 
-    # Build command with persona and capabilities
-    cmd = [
-        "claude", "-p", full_prompt,
-        "--output-format", "json",
-        "--append-system-prompt", dynamic_persona,
-        "--allowedTools", "Read,Grep,Glob,WebSearch,WebFetch,Task,Bash,Edit,Write,Skill",
-        "--add-dir", CLAUDE_WORKING_DIR,  # Can read from anywhere in /home/dev
-    ]
-
-    # Add settings file for permission restrictions (sandbox write-only)
-    if CLAUDE_SETTINGS_FILE:
-        cmd.extend(["--settings", CLAUDE_SETTINGS_FILE])
-
-    if continue_last:
-        cmd.append("--continue")
-    elif session_id:
-        cmd.extend(["--resume", session_id])
-
-    debug(f"Calling Claude: prompt={len(prompt)} chars, continue={continue_last}, session={session_id[:8] if session_id else 'new'}...")
+    debug(f"Calling Claude SDK: prompt={len(prompt)} chars, continue={continue_last}, session={session_id[:8] if session_id else 'new'}...")
+    debug(f"Mode: {mode}, Watch: {watch_enabled}")
     debug(f"Working dir: {SANDBOX_DIR} (sandbox)")
-    debug(f"Read access: {CLAUDE_WORKING_DIR}")
+
+    # Track tool approvals for this call
+    approval_event = None
+    current_approval_id = None
+
+    async def can_use_tool(tool_name: str, tool_input: dict, ctx) -> PermissionResultAllow | PermissionResultDeny:
+        """Callback for tool approval in approve mode."""
+        nonlocal approval_event, current_approval_id
+
+        if mode != "approve":
+            return PermissionResultAllow()
+
+        if update is None:
+            debug(f"No update context for approval, allowing {tool_name}")
+            return PermissionResultAllow()
+
+        # Generate unique approval ID
+        import uuid
+        current_approval_id = str(uuid.uuid4())[:8]
+        approval_event = asyncio.Event()
+
+        # Store pending approval
+        pending_approvals[current_approval_id] = {
+            "event": approval_event,
+            "approved": None,
+            "tool_name": tool_name,
+            "input": tool_input,
+        }
+
+        # Send approval request to Telegram
+        keyboard = [
+            [
+                InlineKeyboardButton("Approve", callback_data=f"approve_{current_approval_id}"),
+                InlineKeyboardButton("Reject", callback_data=f"reject_{current_approval_id}"),
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        message_text = f"Tool Request:\n{format_tool_call(tool_name, tool_input)}"
+        await update.message.reply_text(message_text, reply_markup=reply_markup, parse_mode="Markdown")
+
+        debug(f"Waiting for approval: {current_approval_id} ({tool_name})")
+
+        # Wait for user response (with timeout)
+        try:
+            await asyncio.wait_for(approval_event.wait(), timeout=300)  # 5 min timeout
+        except asyncio.TimeoutError:
+            debug(f"Approval timeout for {current_approval_id}")
+            del pending_approvals[current_approval_id]
+            return PermissionResultDeny(message="Approval timed out")
+
+        # Check result
+        approval_data = pending_approvals.pop(current_approval_id, {})
+        if approval_data.get("approved"):
+            debug(f"Tool approved: {tool_name}")
+            return PermissionResultAllow()
+        else:
+            debug(f"Tool rejected: {tool_name}")
+            return PermissionResultDeny(message="User rejected tool")
+
+    # Build SDK options
+    options = ClaudeCodeOptions(
+        system_prompt=dynamic_persona,
+        allowed_tools=["Read", "Grep", "Glob", "WebSearch", "WebFetch", "Task", "Bash", "Edit", "Write", "Skill"],
+        cwd=SANDBOX_DIR,
+        can_use_tool=can_use_tool if mode == "approve" else None,
+    )
+
+    # Handle session continuation
+    if continue_last:
+        options.continue_conversation = True
+    elif session_id:
+        options.resume = session_id
+
+    result_text = ""
+    new_session_id = session_id
+    metadata = {}
+    tool_count = 0
 
     try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=300,  # 5 min timeout
-            cwd=SANDBOX_DIR  # Execute in sandbox, but can read from CLAUDE_WORKING_DIR
-        )
+        async for message in claude_query(prompt=full_prompt, options=options):
+            # Handle different message types
+            if isinstance(message, AssistantMessage):
+                for block in message.content:
+                    if isinstance(block, TextBlock):
+                        result_text += block.text
+                    elif isinstance(block, ToolUseBlock):
+                        tool_count += 1
+                        if watch_enabled and update:
+                            # Stream tool call to Telegram
+                            tool_msg = f"Using: {block.name}"
+                            try:
+                                await update.message.reply_text(tool_msg)
+                            except Exception as e:
+                                debug(f"Failed to send watch message: {e}")
 
-        if result.returncode == 0:
-            try:
-                data = json.loads(result.stdout)
-                metadata = {
-                    "cost": data.get("total_cost_usd", 0),
-                    "num_turns": data.get("num_turns", 1),
-                    "duration_ms": data.get("duration_ms", 0),
-                }
-                debug(f"Claude responded: {len(data.get('result', ''))} chars, {metadata['num_turns']} turns, ${metadata['cost']:.4f}")
-                return data.get("result", result.stdout), data.get("session_id", session_id), metadata
-            except json.JSONDecodeError:
-                return result.stdout, session_id, {}
-        else:
-            debug(f"Claude error: {result.stderr[:100]}")
-            return f"Error: {result.stderr}", session_id, {}
+            elif isinstance(message, ResultMessage):
+                # Extract final result and metadata
+                if hasattr(message, "result") and message.result:
+                    result_text = message.result
+                if hasattr(message, "session_id") and message.session_id:
+                    new_session_id = message.session_id
+                if hasattr(message, "total_cost_usd"):
+                    metadata["cost"] = message.total_cost_usd
+                if hasattr(message, "num_turns"):
+                    metadata["num_turns"] = message.num_turns
+                if hasattr(message, "duration_ms"):
+                    metadata["duration_ms"] = message.duration_ms
 
-    except subprocess.TimeoutExpired:
-        return "Task timed out after 5 minutes.", session_id, {}
+        debug(f"Claude SDK responded: {len(result_text)} chars, {tool_count} tools used")
+        return result_text, new_session_id, metadata
+
     except Exception as e:
+        debug(f"Claude SDK error: {e}")
         return f"Error calling Claude: {e}", session_id, {}
 
 
@@ -540,15 +657,24 @@ async def cmd_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Build settings message
     audio_status = "ON" if settings["audio_enabled"] else "OFF"
     speed = settings["voice_speed"]
+    mode = settings.get("mode", "go_all")
+    mode_display = "Go All" if mode == "go_all" else "Approve"
+    watch_status = "ON" if settings.get("watch_enabled", False) else "OFF"
 
     message = (
         f"Settings:\n\n"
+        f"Mode: {mode_display}\n"
+        f"Watch: {watch_status}\n"
         f"Audio: {audio_status}\n"
         f"Voice Speed: {speed}x"
     )
 
     # Build inline keyboard
     keyboard = [
+        [
+            InlineKeyboardButton(f"Mode: {mode_display}", callback_data="setting_mode_toggle"),
+            InlineKeyboardButton(f"Watch: {watch_status}", callback_data="setting_watch_toggle"),
+        ],
         [InlineKeyboardButton(f"Audio: {audio_status}", callback_data="setting_audio_toggle")],
         [
             InlineKeyboardButton("0.8x", callback_data="setting_speed_0.8"),
@@ -577,6 +703,17 @@ async def handle_settings_callback(update: Update, context: ContextTypes.DEFAULT
         save_settings()
         debug(f"Audio toggled to: {settings['audio_enabled']}")
 
+    elif callback_data == "setting_mode_toggle":
+        current_mode = settings.get("mode", "go_all")
+        settings["mode"] = "approve" if current_mode == "go_all" else "go_all"
+        save_settings()
+        debug(f"Mode toggled to: {settings['mode']}")
+
+    elif callback_data == "setting_watch_toggle":
+        settings["watch_enabled"] = not settings.get("watch_enabled", False)
+        save_settings()
+        debug(f"Watch toggled to: {settings['watch_enabled']}")
+
     elif callback_data.startswith("setting_speed_"):
         speed = float(callback_data.replace("setting_speed_", ""))
         settings["voice_speed"] = speed
@@ -586,10 +723,17 @@ async def handle_settings_callback(update: Update, context: ContextTypes.DEFAULT
     # Build updated settings menu
     audio_status = "ON" if settings["audio_enabled"] else "OFF"
     speed = settings["voice_speed"]
+    mode = settings.get("mode", "go_all")
+    mode_display = "Go All" if mode == "go_all" else "Approve"
+    watch_status = "ON" if settings.get("watch_enabled", False) else "OFF"
 
-    message = f"Settings:\n\nAudio: {audio_status}\nVoice Speed: {speed}x"
+    message = f"Settings:\n\nMode: {mode_display}\nWatch: {watch_status}\nAudio: {audio_status}\nVoice Speed: {speed}x"
 
     keyboard = [
+        [
+            InlineKeyboardButton(f"Mode: {mode_display}", callback_data="setting_mode_toggle"),
+            InlineKeyboardButton(f"Watch: {watch_status}", callback_data="setting_watch_toggle"),
+        ],
         [InlineKeyboardButton(f"Audio: {audio_status}", callback_data="setting_audio_toggle")],
         [
             InlineKeyboardButton("0.8x", callback_data="setting_speed_0.8"),
@@ -605,6 +749,32 @@ async def handle_settings_callback(update: Update, context: ContextTypes.DEFAULT
         await query.edit_message_text(message, reply_markup=reply_markup)
     except Exception as e:
         debug(f"Error updating settings menu: {e}")
+
+    await query.answer()
+
+
+async def handle_approval_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle approval/rejection button callbacks."""
+    query = update.callback_query
+    callback_data = query.data
+
+    if callback_data.startswith("approve_"):
+        approval_id = callback_data.replace("approve_", "")
+        if approval_id in pending_approvals:
+            pending_approvals[approval_id]["approved"] = True
+            pending_approvals[approval_id]["event"].set()
+            await query.edit_message_text(f"Approved: {pending_approvals[approval_id]['tool_name']}")
+        else:
+            await query.edit_message_text("Approval expired")
+
+    elif callback_data.startswith("reject_"):
+        approval_id = callback_data.replace("reject_", "")
+        if approval_id in pending_approvals:
+            pending_approvals[approval_id]["approved"] = False
+            pending_approvals[approval_id]["event"].set()
+            await query.edit_message_text(f"Rejected: {pending_approvals[approval_id]['tool_name']}")
+        else:
+            await query.edit_message_text("Approval expired")
 
     await query.answer()
 
@@ -650,7 +820,9 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text,
             session_id=state["current_session"],
             continue_last=continue_last,
-            user_settings=settings
+            user_settings=settings,
+            update=update,
+            context=context,
         )
 
         # Update session state
@@ -697,7 +869,9 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text,
             session_id=state["current_session"],
             continue_last=continue_last,
-            user_settings=settings
+            user_settings=settings,
+            update=update,
+            context=context,
         )
 
         if new_session_id and new_session_id != state["current_session"]:
@@ -739,6 +913,7 @@ def main():
 
     # Callback handlers for inline keyboards
     app.add_handler(CallbackQueryHandler(handle_settings_callback, pattern="^setting_"))
+    app.add_handler(CallbackQueryHandler(handle_approval_callback, pattern="^(approve_|reject_)"))
 
     # Messages
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))

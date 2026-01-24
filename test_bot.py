@@ -25,6 +25,22 @@ os.environ["SYSTEM_PROMPT_FILE"] = ""  # Use default prompt in tests
 os.environ["PERSONA_NAME"] = "TestBot"
 os.environ["ELEVENLABS_VOICE_ID"] = "test_voice_id"
 
+# Helper function to create ResultMessage with required fields
+def make_result_message(result="test response", session_id="abc123", **kwargs):
+    """Create a ResultMessage with sensible defaults for testing."""
+    from claude_code_sdk.types import ResultMessage
+    return ResultMessage(
+        subtype="result",
+        duration_ms=kwargs.get("duration_ms", 1000),
+        duration_api_ms=kwargs.get("duration_api_ms", 800),
+        is_error=kwargs.get("is_error", False),
+        num_turns=kwargs.get("num_turns", 1),
+        session_id=session_id,
+        total_cost_usd=kwargs.get("total_cost_usd", 0.01),
+        result=result,
+    )
+
+
 # Prevent dotenv from loading .env file
 from unittest.mock import patch
 with patch('dotenv.load_dotenv'):
@@ -261,75 +277,59 @@ class TestClaudeCall:
 
     @pytest.mark.asyncio
     async def test_claude_call_includes_persona(self):
-        """Claude call should include --append-system-prompt with dynamic persona"""
-        with patch('subprocess.run') as mock_run:
-            mock_run.return_value = Mock(
-                returncode=0,
-                stdout=json.dumps({"result": "test", "session_id": "abc123"})
-            )
+        """Claude SDK call should include system_prompt with dynamic persona"""
+        async def mock_query(**kwargs):
+            # Verify system_prompt contains base prompt
+            options = kwargs.get('options')
+            assert options is not None
+            assert options.system_prompt is not None
+            assert bot.BASE_SYSTEM_PROMPT[:50] in options.system_prompt
+            yield make_result_message()
 
+        with patch('bot.claude_query', side_effect=mock_query):
             await bot.call_claude("test prompt")
-
-            cmd = mock_run.call_args[0][0]
-            assert '--append-system-prompt' in cmd
-            # Dynamic persona should be in the command (contains base prompt + timestamp)
-            persona_idx = cmd.index('--append-system-prompt') + 1
-            # Check that the dynamic prompt contains parts of the base prompt
-            assert bot.BASE_SYSTEM_PROMPT[:50] in cmd[persona_idx]
 
     @pytest.mark.asyncio
     async def test_claude_call_includes_allowed_tools(self):
-        """Claude call should include --allowedTools with all required tools"""
-        with patch('subprocess.run') as mock_run:
-            mock_run.return_value = Mock(
-                returncode=0,
-                stdout=json.dumps({"result": "test", "session_id": "abc123"})
-            )
+        """Claude SDK call should include allowed_tools with all required tools"""
+        async def mock_query(**kwargs):
+            options = kwargs.get('options')
+            assert options is not None
+            assert options.allowed_tools is not None
 
-            await bot.call_claude("test prompt")
-
-            cmd = mock_run.call_args[0][0]
-            assert '--allowedTools' in cmd
-
-            tools_idx = cmd.index('--allowedTools') + 1
-            tools = cmd[tools_idx]
-
-            # Check all required tools are present
             required_tools = ['Read', 'Grep', 'Glob', 'WebSearch', 'WebFetch',
                             'Task', 'Bash', 'Edit', 'Write', 'Skill']
             for tool in required_tools:
-                assert tool in tools, f"Tool {tool} should be in allowedTools"
+                assert tool in options.allowed_tools, f"Tool {tool} should be in allowed_tools"
 
-    @pytest.mark.asyncio
-    async def test_claude_call_includes_add_dir(self):
-        """Claude call should include --add-dir for read access"""
-        with patch('subprocess.run') as mock_run:
-            mock_run.return_value = Mock(
-                returncode=0,
-                stdout=json.dumps({"result": "test", "session_id": "abc123"})
-            )
+            yield make_result_message()
 
+        with patch('bot.claude_query', side_effect=mock_query):
             await bot.call_claude("test prompt")
 
-            cmd = mock_run.call_args[0][0]
-            assert '--add-dir' in cmd
+    @pytest.mark.asyncio
+    async def test_claude_call_includes_cwd(self):
+        """Claude SDK call should include cwd for sandbox directory"""
+        async def mock_query(**kwargs):
+            options = kwargs.get('options')
+            assert options is not None
+            assert options.cwd == bot.SANDBOX_DIR
+            yield make_result_message()
 
-            add_dir_idx = cmd.index('--add-dir') + 1
-            assert cmd[add_dir_idx] == bot.CLAUDE_WORKING_DIR
+        with patch('bot.claude_query', side_effect=mock_query):
+            await bot.call_claude("test prompt")
 
     @pytest.mark.asyncio
     async def test_claude_call_uses_sandbox_as_cwd(self):
-        """Claude call should execute in sandbox directory"""
-        with patch('subprocess.run') as mock_run:
-            mock_run.return_value = Mock(
-                returncode=0,
-                stdout=json.dumps({"result": "test", "session_id": "abc123"})
-            )
+        """Claude SDK call should set cwd to sandbox directory"""
+        async def mock_query(**kwargs):
+            options = kwargs.get('options')
+            assert options is not None
+            assert str(options.cwd) == bot.SANDBOX_DIR
+            yield make_result_message()
 
+        with patch('bot.claude_query', side_effect=mock_query):
             await bot.call_claude("test prompt")
-
-            call_kwargs = mock_run.call_args[1]
-            assert call_kwargs['cwd'] == bot.SANDBOX_DIR
 
     @pytest.mark.asyncio
     async def test_claude_call_loads_megg_context(self):
@@ -348,33 +348,27 @@ class TestClaudeCall:
 
     @pytest.mark.asyncio
     async def test_claude_call_continue_session(self):
-        """Claude call should use --continue flag when continuing"""
-        with patch('subprocess.run') as mock_run:
-            mock_run.return_value = Mock(
-                returncode=0,
-                stdout=json.dumps({"result": "test", "session_id": "abc123"})
-            )
+        """Claude SDK call should set continue_conversation when continuing"""
+        async def mock_query(**kwargs):
+            options = kwargs.get('options')
+            assert options is not None
+            assert options.continue_conversation is True
+            yield make_result_message()
 
+        with patch('bot.claude_query', side_effect=mock_query):
             await bot.call_claude("test prompt", continue_last=True)
-
-            cmd = mock_run.call_args[0][0]
-            assert '--continue' in cmd
 
     @pytest.mark.asyncio
     async def test_claude_call_resume_session(self):
-        """Claude call should use --resume flag with session ID"""
-        with patch('subprocess.run') as mock_run:
-            mock_run.return_value = Mock(
-                returncode=0,
-                stdout=json.dumps({"result": "test", "session_id": "abc123"})
-            )
+        """Claude SDK call should set resume with session ID"""
+        async def mock_query(**kwargs):
+            options = kwargs.get('options')
+            assert options is not None
+            assert options.resume == "existing-session-id"
+            yield make_result_message()
 
+        with patch('bot.claude_query', side_effect=mock_query):
             await bot.call_claude("test prompt", session_id="existing-session-id")
-
-            cmd = mock_run.call_args[0][0]
-            assert '--resume' in cmd
-            resume_idx = cmd.index('--resume') + 1
-            assert cmd[resume_idx] == "existing-session-id"
 
 
 class TestSandboxSetup:
@@ -508,20 +502,16 @@ class TestIntegrationFlow:
     @pytest.mark.asyncio
     async def test_complete_voice_flow_mocked(self):
         """Test complete voice message flow with mocks"""
+        async def mock_query(**kwargs):
+            yield make_result_message(result="V says: Here is the response.", session_id="test-session-123")
+
         # This tests the integration of all components
         with patch.object(bot.elevenlabs.speech_to_text, 'convert') as mock_stt, \
              patch.object(bot.elevenlabs.text_to_speech, 'convert') as mock_tts, \
-             patch('subprocess.run') as mock_claude:
+             patch('bot.claude_query', side_effect=mock_query):
 
             mock_stt.return_value = Mock(text="test voice input")
             mock_tts.return_value = iter([b'audio_response'])
-            mock_claude.return_value = Mock(
-                returncode=0,
-                stdout=json.dumps({
-                    "result": "V says: Here is the response.",
-                    "session_id": "test-session-123"
-                })
-            )
 
             # Test transcription
             transcription = await bot.transcribe_voice(b"fake audio")
@@ -870,46 +860,28 @@ class TestErrorHandling:
     """Test error handling paths"""
 
     @pytest.mark.asyncio
-    async def test_call_claude_timeout(self):
-        """Test Claude call timeout handling"""
-        with patch('subprocess.run') as mock_run:
-            import subprocess
-            mock_run.side_effect = subprocess.TimeoutExpired(cmd="claude", timeout=300)
-
-            response, session_id, metadata = await bot.call_claude("test")
-
-            assert "timed out" in response.lower()
-
-    @pytest.mark.asyncio
     async def test_call_claude_exception(self):
-        """Test Claude call generic exception handling"""
-        with patch('subprocess.run') as mock_run:
-            mock_run.side_effect = Exception("Connection failed")
+        """Test Claude SDK call generic exception handling"""
+        async def mock_query(**kwargs):
+            raise Exception("Connection failed")
+            yield  # Required to make this an async generator
 
+        with patch('bot.claude_query', side_effect=mock_query):
             response, session_id, metadata = await bot.call_claude("test")
 
             assert "Error" in response
 
     @pytest.mark.asyncio
-    async def test_call_claude_non_zero_return(self):
-        """Test Claude call with non-zero return code"""
-        with patch('subprocess.run') as mock_run:
-            mock_run.return_value = Mock(returncode=1, stderr="Command failed", stdout="")
+    async def test_call_claude_sdk_error(self):
+        """Test Claude SDK call error handling"""
+        async def mock_query(**kwargs):
+            raise RuntimeError("SDK initialization failed")
+            yield  # Required to make this an async generator
 
+        with patch('bot.claude_query', side_effect=mock_query):
             response, session_id, metadata = await bot.call_claude("test")
 
             assert "Error" in response
-
-    @pytest.mark.asyncio
-    async def test_call_claude_invalid_json(self):
-        """Test Claude call with invalid JSON response"""
-        with patch('subprocess.run') as mock_run:
-            mock_run.return_value = Mock(returncode=0, stdout="not json", stderr="")
-
-            response, session_id, metadata = await bot.call_claude("test")
-
-            # Should return raw stdout on JSON decode error
-            assert response == "not json"
 
     @pytest.mark.asyncio
     async def test_handle_voice_exception(self):
@@ -955,34 +927,31 @@ class TestClaudeCallMetadata:
 
     @pytest.mark.asyncio
     async def test_call_claude_extracts_metadata(self):
-        """Test that metadata is extracted from Claude response"""
-        with patch('subprocess.run') as mock_run:
-            mock_run.return_value = Mock(
-                returncode=0,
-                stdout=json.dumps({
-                    "result": "test response",
-                    "session_id": "sess-123",
-                    "total_cost_usd": 0.05,
-                    "num_turns": 3,
-                    "duration_ms": 5000
-                })
+        """Test that metadata is extracted from Claude SDK response"""
+        async def mock_query(**kwargs):
+            yield make_result_message(
+                result="test response",
+                session_id="sess-123",
+                total_cost_usd=0.05,
+                num_turns=3,
+                duration_ms=5000,
             )
 
+        with patch('bot.claude_query', side_effect=mock_query):
             response, session_id, metadata = await bot.call_claude("test")
 
-            assert metadata["cost"] == 0.05
-            assert metadata["num_turns"] == 3
-            assert metadata["duration_ms"] == 5000
+            assert metadata.get("cost") == 0.05
+            assert metadata.get("num_turns") == 3
+            assert metadata.get("duration_ms") == 5000
 
     @pytest.mark.asyncio
     async def test_call_claude_no_megg_on_continue(self):
         """Test megg context is not loaded when continuing"""
-        with patch('subprocess.run') as mock_run, \
+        async def mock_query(**kwargs):
+            yield make_result_message(result="ok")
+
+        with patch('bot.claude_query', side_effect=mock_query), \
              patch('bot.load_megg_context') as mock_megg:
-            mock_run.return_value = Mock(
-                returncode=0,
-                stdout=json.dumps({"result": "ok", "session_id": "abc"})
-            )
 
             await bot.call_claude("test", continue_last=True)
 
@@ -991,12 +960,11 @@ class TestClaudeCallMetadata:
     @pytest.mark.asyncio
     async def test_call_claude_no_megg_on_resume(self):
         """Test megg context is not loaded when resuming"""
-        with patch('subprocess.run') as mock_run, \
+        async def mock_query(**kwargs):
+            yield make_result_message(result="ok")
+
+        with patch('bot.claude_query', side_effect=mock_query), \
              patch('bot.load_megg_context') as mock_megg:
-            mock_run.return_value = Mock(
-                returncode=0,
-                stdout=json.dumps({"result": "ok", "session_id": "abc"})
-            )
 
             await bot.call_claude("test", session_id="existing-session")
 
@@ -1215,6 +1183,205 @@ class TestSettingsCommand:
         # Speed should be changed
         assert bot.user_settings["12345"]["voice_speed"] == 0.9
 
+    @pytest.mark.asyncio
+    async def test_settings_callback_mode_toggle(self):
+        """Test mode toggle callback"""
+        bot.user_settings = {"12345": {
+            "audio_enabled": True,
+            "voice_speed": 1.1,
+            "mode": "go_all",
+            "watch_enabled": False,
+        }}
+
+        query = AsyncMock()
+        query.data = "setting_mode_toggle"
+        query.answer = AsyncMock()
+        query.edit_message_text = AsyncMock()
+
+        update = AsyncMock()
+        update.callback_query = query
+        update.effective_user.id = 12345
+
+        context = Mock()
+
+        with patch('bot.save_settings'):
+            await bot.handle_settings_callback(update, context)
+
+        # Mode should be toggled to approve
+        assert bot.user_settings["12345"]["mode"] == "approve"
+
+    @pytest.mark.asyncio
+    async def test_settings_callback_watch_toggle(self):
+        """Test watch toggle callback"""
+        bot.user_settings = {"12345": {
+            "audio_enabled": True,
+            "voice_speed": 1.1,
+            "mode": "go_all",
+            "watch_enabled": False,
+        }}
+
+        query = AsyncMock()
+        query.data = "setting_watch_toggle"
+        query.answer = AsyncMock()
+        query.edit_message_text = AsyncMock()
+
+        update = AsyncMock()
+        update.callback_query = query
+        update.effective_user.id = 12345
+
+        context = Mock()
+
+        with patch('bot.save_settings'):
+            await bot.handle_settings_callback(update, context)
+
+        # Watch should be toggled on
+        assert bot.user_settings["12345"]["watch_enabled"] == True
+
+
+class TestModeAndWatchSettings:
+    """Test Mode (Go All/Approve) and Watch (ON/OFF) settings"""
+
+    @pytest.mark.asyncio
+    async def test_default_settings_include_mode_and_watch(self):
+        """New user settings should include mode and watch"""
+        bot.user_settings = {}
+
+        settings = bot.get_user_settings(99999)
+
+        assert "mode" in settings
+        assert settings["mode"] == "go_all"
+        assert "watch_enabled" in settings
+        assert settings["watch_enabled"] == False
+
+    @pytest.mark.asyncio
+    async def test_existing_settings_get_mode_and_watch(self):
+        """Existing users without mode/watch should get defaults"""
+        bot.user_settings = {"12345": {
+            "audio_enabled": True,
+            "voice_speed": 1.1,
+        }}
+
+        settings = bot.get_user_settings(12345)
+
+        assert settings["mode"] == "go_all"
+        assert settings["watch_enabled"] == False
+
+    @pytest.mark.asyncio
+    async def test_call_claude_with_approve_mode(self):
+        """Claude call with approve mode should set can_use_tool callback"""
+        async def mock_query(**kwargs):
+            options = kwargs.get('options')
+            assert options is not None
+            # In approve mode, can_use_tool should be set
+            assert options.can_use_tool is not None
+            yield make_result_message()
+
+        with patch('bot.claude_query', side_effect=mock_query):
+            await bot.call_claude(
+                "test prompt",
+                user_settings={"mode": "approve", "watch_enabled": False}
+            )
+
+    @pytest.mark.asyncio
+    async def test_call_claude_with_go_all_mode(self):
+        """Claude call with go_all mode should not set can_use_tool callback"""
+        async def mock_query(**kwargs):
+            options = kwargs.get('options')
+            assert options is not None
+            # In go_all mode, can_use_tool should be None
+            assert options.can_use_tool is None
+            yield make_result_message()
+
+        with patch('bot.claude_query', side_effect=mock_query):
+            await bot.call_claude(
+                "test prompt",
+                user_settings={"mode": "go_all", "watch_enabled": False}
+            )
+
+    @pytest.mark.asyncio
+    async def test_approval_callback_approve(self):
+        """Test approval callback approves tool"""
+        bot.pending_approvals = {}
+
+        # Create a pending approval
+        import asyncio
+        approval_id = "test123"
+        event = asyncio.Event()
+        bot.pending_approvals[approval_id] = {
+            "event": event,
+            "approved": None,
+            "tool_name": "Read",
+            "input": {"path": "/test"},
+        }
+
+        query = AsyncMock()
+        query.data = f"approve_{approval_id}"
+        query.answer = AsyncMock()
+        query.edit_message_text = AsyncMock()
+
+        update = AsyncMock()
+        update.callback_query = query
+        update.effective_user.id = 12345
+
+        context = Mock()
+
+        await bot.handle_approval_callback(update, context)
+
+        # Check approval was recorded and event is set
+        assert event.is_set()
+        assert bot.pending_approvals[approval_id]["approved"] == True
+
+    @pytest.mark.asyncio
+    async def test_approval_callback_reject(self):
+        """Test approval callback rejects tool"""
+        bot.pending_approvals = {}
+
+        import asyncio
+        approval_id = "test456"
+        event = asyncio.Event()
+        bot.pending_approvals[approval_id] = {
+            "event": event,
+            "approved": None,
+            "tool_name": "Write",
+            "input": {"path": "/test"},
+        }
+
+        query = AsyncMock()
+        query.data = f"reject_{approval_id}"
+        query.answer = AsyncMock()
+        query.edit_message_text = AsyncMock()
+
+        update = AsyncMock()
+        update.callback_query = query
+        update.effective_user.id = 12345
+
+        context = Mock()
+
+        await bot.handle_approval_callback(update, context)
+
+        # Check rejection was recorded
+        assert event.is_set()
+
+    @pytest.mark.asyncio
+    async def test_approval_callback_expired(self):
+        """Test approval callback with expired approval ID"""
+        bot.pending_approvals = {}
+
+        query = AsyncMock()
+        query.data = "approve_expired123"
+        query.answer = AsyncMock()
+        query.edit_message_text = AsyncMock()
+
+        update = AsyncMock()
+        update.callback_query = query
+        update.effective_user.id = 12345
+
+        context = Mock()
+
+        await bot.handle_approval_callback(update, context)
+
+        # Should show expired message
+        query.edit_message_text.assert_called_with("Approval expired")
 
 
 class TestDynamicPrompt:
