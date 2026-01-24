@@ -1095,21 +1095,18 @@ class TestUserSettings:
         assert settings is not None
         assert settings["audio_enabled"] == True
         assert settings["voice_speed"] == bot.VOICE_SETTINGS["speed"]
-        assert settings["approval_mode"] == False
 
     def test_get_user_settings_returns_existing(self):
         """get_user_settings should return existing settings"""
         bot.user_settings = {"12345": {
             "audio_enabled": False,
             "voice_speed": 0.9,
-            "approval_mode": True
         }}
 
         settings = bot.get_user_settings(12345)
 
         assert settings["audio_enabled"] == False
         assert settings["voice_speed"] == 0.9
-        assert settings["approval_mode"] == True
 
     def test_save_and_load_settings(self):
         """Test settings persistence"""
@@ -1124,7 +1121,6 @@ class TestUserSettings:
             bot.user_settings = {"test": {
                 "audio_enabled": False,
                 "voice_speed": 0.8,
-                "approval_mode": True
             }}
             bot.save_settings()
 
@@ -1134,7 +1130,6 @@ class TestUserSettings:
             assert "test" in bot.user_settings
             assert bot.user_settings["test"]["audio_enabled"] == False
             assert bot.user_settings["test"]["voice_speed"] == 0.8
-            assert bot.user_settings["test"]["approval_mode"] == True
         finally:
             bot.SETTINGS_FILE = original_settings_file
             temp_path.unlink(missing_ok=True)
@@ -1165,7 +1160,7 @@ class TestSettingsCommand:
 
         mock_update.message.reply_text.assert_called_once()
         call_args = mock_update.message.reply_text.call_args
-        assert "Current Settings:" in call_args[0][0]
+        assert "Settings:" in call_args[0][0]
         # Check reply_markup was passed
         assert 'reply_markup' in call_args[1]
 
@@ -1175,8 +1170,7 @@ class TestSettingsCommand:
         bot.user_settings = {"12345": {
             "audio_enabled": True,
             "voice_speed": 1.1,
-            "approval_mode": False
-        }}
+                    }}
 
         query = AsyncMock()
         query.data = "setting_audio_toggle"
@@ -1202,8 +1196,7 @@ class TestSettingsCommand:
         bot.user_settings = {"12345": {
             "audio_enabled": True,
             "voice_speed": 1.1,
-            "approval_mode": False
-        }}
+                    }}
 
         query = AsyncMock()
         query.data = "setting_speed_0.9"
@@ -1222,31 +1215,6 @@ class TestSettingsCommand:
         # Speed should be changed
         assert bot.user_settings["12345"]["voice_speed"] == 0.9
 
-    @pytest.mark.asyncio
-    async def test_settings_callback_approval_toggle(self):
-        """Test approval mode toggle callback"""
-        bot.user_settings = {"12345": {
-            "audio_enabled": True,
-            "voice_speed": 1.1,
-            "approval_mode": False
-        }}
-
-        query = AsyncMock()
-        query.data = "setting_approval_toggle"
-        query.answer = AsyncMock()
-        query.edit_message_text = AsyncMock()
-
-        update = AsyncMock()
-        update.callback_query = query
-        update.effective_user.id = 12345
-
-        context = Mock()
-
-        with patch('bot.save_settings'):
-            await bot.handle_settings_callback(update, context)
-
-        # Approval mode should be toggled on
-        assert bot.user_settings["12345"]["approval_mode"] == True
 
 
 class TestDynamicPrompt:
@@ -1269,20 +1237,17 @@ class TestDynamicPrompt:
         """Dynamic prompt should include settings summary when relevant"""
         settings = {
             "audio_enabled": False,
-            "approval_mode": True,
             "voice_speed": 1.0
         }
 
         prompt = bot.build_dynamic_prompt(settings)
 
         assert "Audio responses disabled" in prompt
-        assert "Approval mode enabled" in prompt
 
     def test_build_dynamic_prompt_no_settings_summary_when_defaults(self):
         """Dynamic prompt should not include settings summary when defaults"""
         settings = {
             "audio_enabled": True,
-            "approval_mode": False,
             "voice_speed": 1.1
         }
 
@@ -1290,159 +1255,6 @@ class TestDynamicPrompt:
 
         # Should NOT include settings summary since all are default
         assert "User settings:" not in prompt
-
-
-class TestApprovalMode:
-    """Test interactive action approval"""
-
-    @pytest.mark.asyncio
-    async def test_action_approve_callback(self):
-        """Test action approval callback sends audio"""
-        bot.user_settings = {"12345": {
-            "audio_enabled": True,
-            "voice_speed": 1.1,
-            "approval_mode": True
-        }}
-
-        query = AsyncMock()
-        query.data = "action_approve_123"
-        query.answer = AsyncMock()
-        query.edit_message_text = AsyncMock()
-        query.message.reply_voice = AsyncMock()
-
-        update = AsyncMock()
-        update.callback_query = query
-        update.effective_user.id = 12345
-
-        context = Mock()
-        context.user_data = {
-            "pending_123": {
-                "response": "Test response",
-                "user_id": 12345
-            }
-        }
-
-        with patch('bot.text_to_speech', new_callable=AsyncMock) as mock_tts:
-            mock_tts.return_value = BytesIO(b"audio_data")
-
-            await bot.handle_action_callback(update, context)
-
-        query.answer.assert_called_once()
-        mock_tts.assert_called_once()
-        # Pending action should be cleaned up
-        assert "pending_123" not in context.user_data
-
-    @pytest.mark.asyncio
-    async def test_action_reject_callback(self):
-        """Test action rejection callback"""
-        query = AsyncMock()
-        query.data = "action_reject_456"
-        query.answer = AsyncMock()
-        query.edit_message_text = AsyncMock()
-
-        update = AsyncMock()
-        update.callback_query = query
-
-        context = Mock()
-        context.user_data = {
-            "pending_456": {
-                "response": "Test response",
-                "user_id": 12345
-            }
-        }
-
-        await bot.handle_action_callback(update, context)
-
-        query.answer.assert_called_once()
-        query.edit_message_text.assert_called_once()
-        assert "cancelled" in query.edit_message_text.call_args[0][0]
-        # Pending action should be cleaned up
-        assert "pending_456" not in context.user_data
-
-    @pytest.mark.asyncio
-    async def test_action_callback_expired(self):
-        """Test action callback when action already expired"""
-        query = AsyncMock()
-        query.data = "action_approve_789"
-        query.answer = AsyncMock()
-        query.edit_message_text = AsyncMock()
-
-        update = AsyncMock()
-        update.callback_query = query
-
-        context = Mock()
-        context.user_data = {}  # No pending action
-
-        await bot.handle_action_callback(update, context)
-
-        assert "expired" in query.edit_message_text.call_args[0][0]
-
-
-class TestApprovalModeInHandlers:
-    """Test approval mode integration in voice/text handlers"""
-
-    @pytest.fixture
-    def mock_update_text(self):
-        """Create mock update with text message"""
-        update = AsyncMock()
-        update.effective_user.id = 12345
-        update.effective_chat.id = 12345
-        update.message.text = "Hello V!"
-        processing_msg = AsyncMock()
-        processing_msg.message_id = 999
-        update.message.reply_text = AsyncMock(return_value=processing_msg)
-        update.message.reply_voice = AsyncMock()
-        update.message.message_thread_id = None
-        return update
-
-    @pytest.fixture
-    def mock_context(self):
-        context = Mock()
-        context.user_data = {}
-        return context
-
-    @pytest.mark.asyncio
-    async def test_handle_text_with_approval_mode(self, mock_update_text, mock_context):
-        """Test text handler shows approval buttons when mode enabled"""
-        bot.user_sessions = {}
-        bot.user_settings = {"12345": {
-            "audio_enabled": True,
-            "voice_speed": 1.1,
-            "approval_mode": True
-        }}
-
-        with patch('bot.call_claude', new_callable=AsyncMock) as mock_claude:
-            mock_claude.return_value = ("Test response", "session-123", {})
-
-            await bot.handle_text(mock_update_text, mock_context)
-
-        # Should have stored pending action
-        assert "pending_999" in mock_context.user_data
-        # Should have called edit_text with reply_markup (buttons)
-        edit_call = mock_update_text.message.reply_text.return_value.edit_text
-        assert edit_call.call_args[1].get('reply_markup') is not None
-
-    @pytest.mark.asyncio
-    async def test_handle_text_without_approval_mode(self, mock_update_text, mock_context):
-        """Test text handler sends audio directly when approval mode disabled"""
-        bot.user_sessions = {}
-        bot.user_settings = {"12345": {
-            "audio_enabled": True,
-            "voice_speed": 1.1,
-            "approval_mode": False
-        }}
-
-        with patch('bot.call_claude', new_callable=AsyncMock) as mock_claude, \
-             patch('bot.text_to_speech', new_callable=AsyncMock) as mock_tts:
-            mock_claude.return_value = ("Test response", "session-123", {})
-            mock_tts.return_value = BytesIO(b"audio")
-
-            await bot.handle_text(mock_update_text, mock_context)
-
-        # Should NOT have stored pending action
-        assert "pending_999" not in mock_context.user_data
-        # Should have called TTS directly
-        mock_tts.assert_called_once()
 
 
 class TestAudioEnabledSetting:
@@ -1472,8 +1284,7 @@ class TestAudioEnabledSetting:
         bot.user_settings = {"12345": {
             "audio_enabled": False,
             "voice_speed": 1.1,
-            "approval_mode": False
-        }}
+                    }}
 
         with patch('bot.call_claude', new_callable=AsyncMock) as mock_claude, \
              patch('bot.text_to_speech', new_callable=AsyncMock) as mock_tts:
@@ -1491,8 +1302,7 @@ class TestAudioEnabledSetting:
         bot.user_settings = {"12345": {
             "audio_enabled": True,
             "voice_speed": 1.1,
-            "approval_mode": False
-        }}
+                    }}
 
         with patch('bot.call_claude', new_callable=AsyncMock) as mock_claude, \
              patch('bot.text_to_speech', new_callable=AsyncMock) as mock_tts:
@@ -1539,8 +1349,7 @@ class TestClaudeCallWithUserSettings:
         """Claude call should use dynamic prompt with user settings"""
         user_settings = {
             "audio_enabled": False,
-            "approval_mode": True,
-            "voice_speed": 1.0
+                        "voice_speed": 1.0
         }
 
         with patch('subprocess.run') as mock_run, \
