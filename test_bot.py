@@ -41,6 +41,20 @@ def make_result_message(result="test response", session_id="abc123", **kwargs):
     )
 
 
+def create_mock_client(responses):
+    """Create a mock ClaudeSDKClient that yields given responses."""
+    async def mock_receive():
+        for r in responses:
+            yield r
+
+    mock_client = AsyncMock()
+    mock_client.query = AsyncMock()
+    mock_client.receive_response = mock_receive
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+    return mock_client
+
+
 # Prevent dotenv from loading .env file
 from unittest.mock import patch
 with patch('dotenv.load_dotenv'):
@@ -278,22 +292,33 @@ class TestClaudeCall:
     @pytest.mark.asyncio
     async def test_claude_call_includes_persona(self):
         """Claude SDK call should include system_prompt with dynamic persona"""
-        async def mock_query(**kwargs):
-            # Verify system_prompt contains base prompt
-            options = kwargs.get('options')
+        mock_client = create_mock_client([make_result_message()])
+
+        with patch('bot.ClaudeSDKClient') as mock_sdk:
+            mock_sdk.return_value = mock_client
+            await bot.call_claude("test prompt")
+
+            # Verify ClaudeSDKClient was called with options containing system_prompt
+            assert mock_sdk.called
+            call_kwargs = mock_sdk.call_args[1]
+            options = call_kwargs.get('options')
             assert options is not None
             assert options.system_prompt is not None
             assert bot.BASE_SYSTEM_PROMPT[:50] in options.system_prompt
-            yield make_result_message()
-
-        with patch('bot.claude_query', side_effect=mock_query):
-            await bot.call_claude("test prompt")
 
     @pytest.mark.asyncio
     async def test_claude_call_includes_allowed_tools(self):
         """Claude SDK call should include allowed_tools with all required tools"""
-        async def mock_query(**kwargs):
-            options = kwargs.get('options')
+        mock_client = create_mock_client([make_result_message()])
+
+        with patch('bot.ClaudeSDKClient') as mock_sdk:
+            mock_sdk.return_value = mock_client
+            await bot.call_claude("test prompt")
+
+            # Verify ClaudeSDKClient was called with options containing allowed_tools
+            assert mock_sdk.called
+            call_kwargs = mock_sdk.call_args[1]
+            options = call_kwargs.get('options')
             assert options is not None
             assert options.allowed_tools is not None
 
@@ -302,44 +327,45 @@ class TestClaudeCall:
             for tool in required_tools:
                 assert tool in options.allowed_tools, f"Tool {tool} should be in allowed_tools"
 
-            yield make_result_message()
-
-        with patch('bot.claude_query', side_effect=mock_query):
-            await bot.call_claude("test prompt")
-
     @pytest.mark.asyncio
     async def test_claude_call_includes_cwd(self):
         """Claude SDK call should include cwd for sandbox directory"""
-        async def mock_query(**kwargs):
-            options = kwargs.get('options')
+        mock_client = create_mock_client([make_result_message()])
+
+        with patch('bot.ClaudeSDKClient') as mock_sdk:
+            mock_sdk.return_value = mock_client
+            await bot.call_claude("test prompt")
+
+            # Verify ClaudeSDKClient was called with options containing cwd
+            assert mock_sdk.called
+            call_kwargs = mock_sdk.call_args[1]
+            options = call_kwargs.get('options')
             assert options is not None
             assert options.cwd == bot.SANDBOX_DIR
-            yield make_result_message()
-
-        with patch('bot.claude_query', side_effect=mock_query):
-            await bot.call_claude("test prompt")
 
     @pytest.mark.asyncio
     async def test_claude_call_uses_sandbox_as_cwd(self):
         """Claude SDK call should set cwd to sandbox directory"""
-        async def mock_query(**kwargs):
-            options = kwargs.get('options')
+        mock_client = create_mock_client([make_result_message()])
+
+        with patch('bot.ClaudeSDKClient') as mock_sdk:
+            mock_sdk.return_value = mock_client
+            await bot.call_claude("test prompt")
+
+            # Verify ClaudeSDKClient was called with options containing cwd
+            assert mock_sdk.called
+            call_kwargs = mock_sdk.call_args[1]
+            options = call_kwargs.get('options')
             assert options is not None
             assert str(options.cwd) == bot.SANDBOX_DIR
-            yield make_result_message()
-
-        with patch('bot.claude_query', side_effect=mock_query):
-            await bot.call_claude("test prompt")
 
     @pytest.mark.asyncio
     async def test_claude_call_loads_megg_context(self):
         """Claude call should load megg context for new sessions"""
-        with patch('subprocess.run') as mock_run, \
+        mock_client = create_mock_client([make_result_message()])
+
+        with patch('bot.ClaudeSDKClient', return_value=mock_client), \
              patch('bot.load_megg_context') as mock_megg:
-            mock_run.return_value = Mock(
-                returncode=0,
-                stdout=json.dumps({"result": "test", "session_id": "abc123"})
-            )
             mock_megg.return_value = "test megg context"
 
             await bot.call_claude("test prompt", include_megg=True)
@@ -349,26 +375,34 @@ class TestClaudeCall:
     @pytest.mark.asyncio
     async def test_claude_call_continue_session(self):
         """Claude SDK call should set continue_conversation when continuing"""
-        async def mock_query(**kwargs):
-            options = kwargs.get('options')
+        mock_client = create_mock_client([make_result_message()])
+
+        with patch('bot.ClaudeSDKClient') as mock_sdk:
+            mock_sdk.return_value = mock_client
+            await bot.call_claude("test prompt", continue_last=True)
+
+            # Verify ClaudeSDKClient was called with options containing continue_conversation
+            assert mock_sdk.called
+            call_kwargs = mock_sdk.call_args[1]
+            options = call_kwargs.get('options')
             assert options is not None
             assert options.continue_conversation is True
-            yield make_result_message()
-
-        with patch('bot.claude_query', side_effect=mock_query):
-            await bot.call_claude("test prompt", continue_last=True)
 
     @pytest.mark.asyncio
     async def test_claude_call_resume_session(self):
         """Claude SDK call should set resume with session ID"""
-        async def mock_query(**kwargs):
-            options = kwargs.get('options')
+        mock_client = create_mock_client([make_result_message()])
+
+        with patch('bot.ClaudeSDKClient') as mock_sdk:
+            mock_sdk.return_value = mock_client
+            await bot.call_claude("test prompt", session_id="existing-session-id")
+
+            # Verify ClaudeSDKClient was called with options containing resume
+            assert mock_sdk.called
+            call_kwargs = mock_sdk.call_args[1]
+            options = call_kwargs.get('options')
             assert options is not None
             assert options.resume == "existing-session-id"
-            yield make_result_message()
-
-        with patch('bot.claude_query', side_effect=mock_query):
-            await bot.call_claude("test prompt", session_id="existing-session-id")
 
 
 class TestSandboxSetup:
@@ -502,13 +536,14 @@ class TestIntegrationFlow:
     @pytest.mark.asyncio
     async def test_complete_voice_flow_mocked(self):
         """Test complete voice message flow with mocks"""
-        async def mock_query(**kwargs):
-            yield make_result_message(result="V says: Here is the response.", session_id="test-session-123")
+        mock_client = create_mock_client([
+            make_result_message(result="V says: Here is the response.", session_id="test-session-123")
+        ])
 
         # This tests the integration of all components
         with patch.object(bot.elevenlabs.speech_to_text, 'convert') as mock_stt, \
              patch.object(bot.elevenlabs.text_to_speech, 'convert') as mock_tts, \
-             patch('bot.claude_query', side_effect=mock_query):
+             patch('bot.ClaudeSDKClient', return_value=mock_client):
 
             mock_stt.return_value = Mock(text="test voice input")
             mock_tts.return_value = iter([b'audio_response'])
@@ -862,11 +897,11 @@ class TestErrorHandling:
     @pytest.mark.asyncio
     async def test_call_claude_exception(self):
         """Test Claude SDK call generic exception handling"""
-        async def mock_query(**kwargs):
-            raise Exception("Connection failed")
-            yield  # Required to make this an async generator
+        mock_client = AsyncMock()
+        mock_client.__aenter__ = AsyncMock(side_effect=Exception("Connection failed"))
+        mock_client.__aexit__ = AsyncMock()
 
-        with patch('bot.claude_query', side_effect=mock_query):
+        with patch('bot.ClaudeSDKClient', return_value=mock_client):
             response, session_id, metadata = await bot.call_claude("test")
 
             assert "Error" in response
@@ -874,11 +909,11 @@ class TestErrorHandling:
     @pytest.mark.asyncio
     async def test_call_claude_sdk_error(self):
         """Test Claude SDK call error handling"""
-        async def mock_query(**kwargs):
-            raise RuntimeError("SDK initialization failed")
-            yield  # Required to make this an async generator
+        mock_client = AsyncMock()
+        mock_client.__aenter__ = AsyncMock(side_effect=RuntimeError("SDK initialization failed"))
+        mock_client.__aexit__ = AsyncMock()
 
-        with patch('bot.claude_query', side_effect=mock_query):
+        with patch('bot.ClaudeSDKClient', return_value=mock_client):
             response, session_id, metadata = await bot.call_claude("test")
 
             assert "Error" in response
@@ -928,16 +963,17 @@ class TestClaudeCallMetadata:
     @pytest.mark.asyncio
     async def test_call_claude_extracts_metadata(self):
         """Test that metadata is extracted from Claude SDK response"""
-        async def mock_query(**kwargs):
-            yield make_result_message(
+        mock_client = create_mock_client([
+            make_result_message(
                 result="test response",
                 session_id="sess-123",
                 total_cost_usd=0.05,
                 num_turns=3,
                 duration_ms=5000,
             )
+        ])
 
-        with patch('bot.claude_query', side_effect=mock_query):
+        with patch('bot.ClaudeSDKClient', return_value=mock_client):
             response, session_id, metadata = await bot.call_claude("test")
 
             assert metadata.get("cost") == 0.05
@@ -947,10 +983,9 @@ class TestClaudeCallMetadata:
     @pytest.mark.asyncio
     async def test_call_claude_no_megg_on_continue(self):
         """Test megg context is not loaded when continuing"""
-        async def mock_query(**kwargs):
-            yield make_result_message(result="ok")
+        mock_client = create_mock_client([make_result_message(result="ok")])
 
-        with patch('bot.claude_query', side_effect=mock_query), \
+        with patch('bot.ClaudeSDKClient', return_value=mock_client), \
              patch('bot.load_megg_context') as mock_megg:
 
             await bot.call_claude("test", continue_last=True)
@@ -960,10 +995,9 @@ class TestClaudeCallMetadata:
     @pytest.mark.asyncio
     async def test_call_claude_no_megg_on_resume(self):
         """Test megg context is not loaded when resuming"""
-        async def mock_query(**kwargs):
-            yield make_result_message(result="ok")
+        mock_client = create_mock_client([make_result_message(result="ok")])
 
-        with patch('bot.claude_query', side_effect=mock_query), \
+        with patch('bot.ClaudeSDKClient', return_value=mock_client), \
              patch('bot.load_megg_context') as mock_megg:
 
             await bot.call_claude("test", session_id="existing-session")
@@ -1269,34 +1303,42 @@ class TestModeAndWatchSettings:
     @pytest.mark.asyncio
     async def test_call_claude_with_approve_mode(self):
         """Claude call with approve mode should set can_use_tool callback"""
-        async def mock_query(**kwargs):
-            options = kwargs.get('options')
-            assert options is not None
-            # In approve mode, can_use_tool should be set
-            assert options.can_use_tool is not None
-            yield make_result_message()
+        mock_client = create_mock_client([make_result_message()])
 
-        with patch('bot.claude_query', side_effect=mock_query):
+        with patch('bot.ClaudeSDKClient') as mock_sdk:
+            mock_sdk.return_value = mock_client
             await bot.call_claude(
                 "test prompt",
                 user_settings={"mode": "approve", "watch_enabled": False}
             )
 
+            # Verify ClaudeSDKClient was called with options containing can_use_tool
+            assert mock_sdk.called
+            call_kwargs = mock_sdk.call_args[1]
+            options = call_kwargs.get('options')
+            assert options is not None
+            # In approve mode, can_use_tool should be set
+            assert options.can_use_tool is not None
+
     @pytest.mark.asyncio
     async def test_call_claude_with_go_all_mode(self):
         """Claude call with go_all mode should not set can_use_tool callback"""
-        async def mock_query(**kwargs):
-            options = kwargs.get('options')
-            assert options is not None
-            # In go_all mode, can_use_tool should be None
-            assert options.can_use_tool is None
-            yield make_result_message()
+        mock_client = create_mock_client([make_result_message()])
 
-        with patch('bot.claude_query', side_effect=mock_query):
+        with patch('bot.ClaudeSDKClient') as mock_sdk:
+            mock_sdk.return_value = mock_client
             await bot.call_claude(
                 "test prompt",
                 user_settings={"mode": "go_all", "watch_enabled": False}
             )
+
+            # Verify ClaudeSDKClient was called with options
+            assert mock_sdk.called
+            call_kwargs = mock_sdk.call_args[1]
+            options = call_kwargs.get('options')
+            assert options is not None
+            # In go_all mode, can_use_tool should be None (allowed_tools used instead)
+            assert options.can_use_tool is None
 
     @pytest.mark.asyncio
     async def test_approval_callback_approve(self):

@@ -28,6 +28,7 @@ from elevenlabs.client import ElevenLabs
 from claude_agent_sdk import (
     query as claude_query,
     ClaudeAgentOptions,
+    ClaudeSDKClient,
 )
 from claude_agent_sdk.types import (
     AssistantMessage,
@@ -372,7 +373,10 @@ async def call_claude(
         """Callback for tool approval in approve mode."""
         nonlocal approval_event, current_approval_id
 
+        debug(f">>> can_use_tool CALLED: {tool_name}")
+
         if mode != "approve":
+            debug(f">>> Mode is {mode}, auto-allowing")
             return PermissionResultAllow()
 
         if update is None:
@@ -404,32 +408,49 @@ async def call_claude(
         message_text = f"Tool Request:\n{format_tool_call(tool_name, tool_input)}"
         await update.message.reply_text(message_text, reply_markup=reply_markup, parse_mode="Markdown")
 
-        debug(f"Waiting for approval: {current_approval_id} ({tool_name})")
+        debug(f">>> Waiting for approval: {current_approval_id} ({tool_name}) - pending_approvals keys: {list(pending_approvals.keys())}")
 
         # Wait for user response (with timeout)
         try:
+            debug(f">>> Starting event.wait() for {current_approval_id}")
             await asyncio.wait_for(approval_event.wait(), timeout=300)  # 5 min timeout
+            debug(f">>> Event.wait() completed for {current_approval_id}")
         except asyncio.TimeoutError:
-            debug(f"Approval timeout for {current_approval_id}")
+            debug(f">>> Approval timeout for {current_approval_id}")
             del pending_approvals[current_approval_id]
             return PermissionResultDeny(message="Approval timed out")
 
         # Check result
+        debug(f">>> Checking result for {current_approval_id}")
         approval_data = pending_approvals.pop(current_approval_id, {})
         if approval_data.get("approved"):
-            debug(f"Tool approved: {tool_name}")
+            debug(f">>> Tool approved: {tool_name}")
             return PermissionResultAllow()
         else:
-            debug(f"Tool rejected: {tool_name}")
+            debug(f">>> Tool rejected: {tool_name}")
             return PermissionResultDeny(message="User rejected tool")
 
     # Build SDK options
-    options = ClaudeAgentOptions(
-        system_prompt=dynamic_persona,
-        allowed_tools=["Read", "Grep", "Glob", "WebSearch", "WebFetch", "Task", "Bash", "Edit", "Write", "Skill"],
-        cwd=SANDBOX_DIR,
-        can_use_tool=can_use_tool if mode == "approve" else None,
-    )
+    # In approve mode: don't pre-allow tools - let can_use_tool callback handle each one
+    # In go_all mode: pre-allow all tools for no prompts
+    if mode == "approve":
+        debug(f">>> APPROVE MODE: Setting up can_use_tool callback")
+        options = ClaudeAgentOptions(
+            system_prompt=dynamic_persona,
+            cwd=SANDBOX_DIR,
+            can_use_tool=can_use_tool,
+            permission_mode="default",
+            add_dirs=[CLAUDE_WORKING_DIR],
+        )
+        debug(f">>> Options: can_use_tool={options.can_use_tool is not None}, permission_mode={options.permission_mode}")
+    else:
+        debug(f">>> GO_ALL MODE: Pre-allowing all tools")
+        options = ClaudeAgentOptions(
+            system_prompt=dynamic_persona,
+            allowed_tools=["Read", "Grep", "Glob", "WebSearch", "WebFetch", "Task", "Bash", "Edit", "Write", "Skill"],
+            cwd=SANDBOX_DIR,
+            add_dirs=[CLAUDE_WORKING_DIR],
+        )
 
     # Handle session continuation
     if continue_last:
@@ -443,34 +464,56 @@ async def call_claude(
     tool_count = 0
 
     try:
-        async for message in claude_query(prompt=full_prompt, options=options):
-            # Handle different message types
-            if isinstance(message, AssistantMessage):
-                for block in message.content:
-                    if isinstance(block, TextBlock):
-                        result_text += block.text
-                    elif isinstance(block, ToolUseBlock):
-                        tool_count += 1
-                        if watch_enabled and update:
-                            # Stream tool call to Telegram
-                            tool_msg = f"Using: {block.name}"
-                            try:
-                                await update.message.reply_text(tool_msg)
-                            except Exception as e:
-                                debug(f"Failed to send watch message: {e}")
+        debug(f">>> Starting ClaudeSDKClient with prompt: {len(full_prompt)} chars")
+        async with ClaudeSDKClient(options=options) as client:
+            await client.query(full_prompt)
+            async for message in client.receive_response():
+                # Handle different message types
+                debug(f">>> SDK message type: {type(message).__name__}")
+                if isinstance(message, AssistantMessage):
+                    for block in message.content:
+                        if isinstance(block, TextBlock):
+                            result_text += block.text
+                        elif isinstance(block, ToolUseBlock):
+                            tool_count += 1
+                            if watch_enabled and update:
+                                # Stream tool call to Telegram with details
+                                tool_input = block.input or {}
+                                # Extract key info based on tool type
+                                if block.name == "Bash" and "command" in tool_input:
+                                    cmd = tool_input["command"]
+                                    detail = cmd[:80] + "..." if len(cmd) > 80 else cmd
+                                elif block.name == "Read" and "file_path" in tool_input:
+                                    detail = tool_input["file_path"]
+                                elif block.name == "Edit" and "file_path" in tool_input:
+                                    detail = tool_input["file_path"]
+                                elif block.name == "Write" and "file_path" in tool_input:
+                                    detail = tool_input["file_path"]
+                                elif block.name == "Grep" and "pattern" in tool_input:
+                                    detail = f"/{tool_input['pattern']}/"
+                                elif block.name == "Glob" and "pattern" in tool_input:
+                                    detail = tool_input["pattern"]
+                                else:
+                                    detail = None
 
-            elif isinstance(message, ResultMessage):
-                # Extract final result and metadata
-                if hasattr(message, "result") and message.result:
-                    result_text = message.result
-                if hasattr(message, "session_id") and message.session_id:
-                    new_session_id = message.session_id
-                if hasattr(message, "total_cost_usd"):
-                    metadata["cost"] = message.total_cost_usd
-                if hasattr(message, "num_turns"):
-                    metadata["num_turns"] = message.num_turns
-                if hasattr(message, "duration_ms"):
-                    metadata["duration_ms"] = message.duration_ms
+                                tool_msg = f"{block.name}: {detail}" if detail else f"Using: {block.name}"
+                                try:
+                                    await update.message.reply_text(tool_msg)
+                                except Exception as e:
+                                    debug(f"Failed to send watch message: {e}")
+
+                elif isinstance(message, ResultMessage):
+                    # Extract final result and metadata
+                    if hasattr(message, "result") and message.result:
+                        result_text = message.result
+                    if hasattr(message, "session_id") and message.session_id:
+                        new_session_id = message.session_id
+                    if hasattr(message, "total_cost_usd"):
+                        metadata["cost"] = message.total_cost_usd
+                    if hasattr(message, "num_turns"):
+                        metadata["num_turns"] = message.num_turns
+                    if hasattr(message, "duration_ms"):
+                        metadata["duration_ms"] = message.duration_ms
 
         debug(f"Claude SDK responded: {len(result_text)} chars, {tool_count} tools used")
         return result_text, new_session_id, metadata
@@ -758,31 +801,48 @@ async def handle_approval_callback(update: Update, context: ContextTypes.DEFAULT
     query = update.callback_query
     callback_data = query.data
 
+    debug(f">>> APPROVAL CALLBACK received: {callback_data}")
+
+    # Answer the callback immediately to prevent Telegram timeout
+    await query.answer()
+
     if callback_data.startswith("approve_"):
         approval_id = callback_data.replace("approve_", "")
+        debug(f">>> Looking for approval_id: {approval_id} in {list(pending_approvals.keys())}")
         if approval_id in pending_approvals:
+            tool_name = pending_approvals[approval_id]["tool_name"]
             pending_approvals[approval_id]["approved"] = True
+            debug(f">>> Setting event for {approval_id}")
             pending_approvals[approval_id]["event"].set()
-            await query.edit_message_text(f"Approved: {pending_approvals[approval_id]['tool_name']}")
+            debug(f">>> Event set, updating message")
+            await query.edit_message_text(f"✓ Approved: {tool_name}")
         else:
+            debug(f">>> Approval {approval_id} not found (expired)")
             await query.edit_message_text("Approval expired")
 
     elif callback_data.startswith("reject_"):
         approval_id = callback_data.replace("reject_", "")
+        debug(f">>> Looking for approval_id: {approval_id} in {list(pending_approvals.keys())}")
         if approval_id in pending_approvals:
+            tool_name = pending_approvals[approval_id]["tool_name"]
             pending_approvals[approval_id]["approved"] = False
+            debug(f">>> Setting event for {approval_id} (reject)")
             pending_approvals[approval_id]["event"].set()
-            await query.edit_message_text(f"Rejected: {pending_approvals[approval_id]['tool_name']}")
+            debug(f">>> Event set, updating message")
+            await query.edit_message_text(f"✗ Rejected: {tool_name}")
         else:
+            debug(f">>> Approval {approval_id} not found (expired)")
             await query.edit_message_text("Approval expired")
-
-    await query.answer()
 
 
 # ============ Voice Handler ============
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle incoming voice messages."""
+    # Ignore messages from bots (including ourselves)
+    if update.effective_user.is_bot is True:
+        return
+
     debug(f"VOICE received from user {update.effective_user.id}, chat {update.effective_chat.id}, topic {update.message.message_thread_id}")
 
     # Topic filtering - ignore messages not in our topic
@@ -848,6 +908,10 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle text messages (same flow as voice, skip transcription)."""
+    # Ignore messages from bots (including ourselves)
+    if update.effective_user.is_bot is True:
+        return
+
     debug(f"TEXT received: '{update.message.text[:50]}' from user {update.effective_user.id}, chat {update.effective_chat.id}, topic {update.message.message_thread_id}")
 
     # Topic filtering - ignore messages not in our topic
@@ -899,7 +963,9 @@ def main():
     load_state()
     load_settings()
 
-    app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
+    # Enable concurrent_updates to allow callback handlers to run while message handlers await
+    # This is CRITICAL for approve mode - the approval callback needs to run while call_claude waits
+    app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).concurrent_updates(True).build()
 
     # Commands
     app.add_handler(CommandHandler("start", cmd_start))
