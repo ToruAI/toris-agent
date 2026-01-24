@@ -24,19 +24,19 @@ from telegram.ext import (
 )
 from elevenlabs.client import ElevenLabs
 
-# Claude Code SDK
-from claude_code_sdk import (
+# Claude Agent SDK (official SDK for Claude Code)
+from claude_agent_sdk import (
     query as claude_query,
-    ClaudeCodeOptions,
-    PermissionResultAllow,
-    PermissionResultDeny,
+    ClaudeAgentOptions,
 )
-from claude_code_sdk.types import (
+from claude_agent_sdk.types import (
     AssistantMessage,
     ResultMessage,
     TextBlock,
     ToolUseBlock,
     ToolResultBlock,
+    PermissionResultAllow,
+    PermissionResultDeny,
 )
 
 load_dotenv()
@@ -424,7 +424,7 @@ async def call_claude(
             return PermissionResultDeny(message="User rejected tool")
 
     # Build SDK options
-    options = ClaudeCodeOptions(
+    options = ClaudeAgentOptions(
         system_prompt=dynamic_persona,
         allowed_tools=["Read", "Grep", "Glob", "WebSearch", "WebFetch", "Task", "Bash", "Edit", "Write", "Skill"],
         cwd=SANDBOX_DIR,
@@ -442,20 +442,8 @@ async def call_claude(
     metadata = {}
     tool_count = 0
 
-    # Create async prompt generator for streaming mode (required for can_use_tool)
-    async def prompt_stream():
-        yield {
-            "type": "user",
-            "message": {"role": "user", "content": full_prompt},
-            "parent_tool_use_id": None,
-            "session_id": "default"
-        }
-
-    # Use streaming mode if approve mode is enabled (required for can_use_tool)
-    prompt_input = prompt_stream() if mode == "approve" else full_prompt
-
     try:
-        async for message in claude_query(prompt=prompt_input, options=options):
+        async for message in claude_query(prompt=full_prompt, options=options):
             # Handle different message types
             if isinstance(message, AssistantMessage):
                 for block in message.content:

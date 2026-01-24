@@ -28,7 +28,7 @@ os.environ["ELEVENLABS_VOICE_ID"] = "test_voice_id"
 # Helper function to create ResultMessage with required fields
 def make_result_message(result="test response", session_id="abc123", **kwargs):
     """Create a ResultMessage with sensible defaults for testing."""
-    from claude_code_sdk.types import ResultMessage
+    from claude_agent_sdk.types import ResultMessage
     return ResultMessage(
         subtype="result",
         duration_ms=kwargs.get("duration_ms", 1000),
