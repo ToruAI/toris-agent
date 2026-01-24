@@ -84,7 +84,7 @@ This project supports two deployment modes:
 
 ### Option 1: Docker (Recommended for Production)
 
-Best for production deployment and running multiple personas.
+Best for production deployment with automatic restarts and isolation.
 
 **Quick Start:**
 ```bash
@@ -92,26 +92,23 @@ Best for production deployment and running multiple personas.
 git clone https://github.com/toruai/claude-voice-assistant.git
 cd claude-voice-assistant
 
-# Configure personas
-cp docker/v.env.example docker/v.env
-cp docker/tc.env.example docker/tc.env
-# Edit docker/v.env and docker/tc.env with your API keys
+# Configure your assistant
+cp docker/assistant.env.example docker/assistant.env
+# Edit docker/assistant.env with your API keys
 
-# Start services
+# Start
 docker-compose up -d
 
 # View logs
-docker-compose logs -f v
-docker-compose logs -f tc
+docker-compose logs -f assistant
 
-# Stop services
+# Stop
 docker-compose down
 ```
 
 **Benefits:**
-- Isolated sandboxes per persona
-- Automatic restarts
-- Easy multi-persona setup
+- Isolated sandbox for file operations
+- Automatic restarts on failure
 - No Python/Node installation needed
 - Persistent state across restarts
 
@@ -121,9 +118,8 @@ claude-voice-assistant/
 ├── Dockerfile
 ├── docker-compose.yml
 ├── docker/
-│   ├── v.env          # V persona config
-│   └── tc.env         # TC persona config
-└── prompts/           # Shared persona prompts
+│   └── assistant.env  # Your config (from example.env)
+└── prompts/           # Persona prompts
 ```
 
 See [Docker Deployment Guide](#docker-deployment-guide) for details.
@@ -233,20 +229,16 @@ You are V, a brilliant and slightly cynical voice assistant.
 # Build the image
 docker-compose build
 
-# Start all personas
+# Start
 docker-compose up -d
 
-# Start specific persona
-docker-compose up -d v
+# View logs
+docker-compose logs -f assistant
 
-# View logs (follow mode)
-docker-compose logs -f v
-docker-compose logs -f tc
+# Restart
+docker-compose restart assistant
 
-# Restart a persona
-docker-compose restart v
-
-# Stop all
+# Stop
 docker-compose down
 
 # Stop and remove volumes (WARNING: deletes session history)
@@ -255,19 +247,17 @@ docker-compose down -v
 
 ### Configuration
 
-Each persona has its own environment file in `docker/`:
+Copy and edit the example environment file:
 
 ```bash
-# Required files (create from examples):
-docker/v.env    # V persona configuration
-docker/tc.env   # TC persona configuration
+cp docker/assistant.env.example docker/assistant.env
 ```
 
 **Key environment variables:**
 - `TELEGRAM_BOT_TOKEN` - Bot token from @BotFather
 - `TELEGRAM_DEFAULT_CHAT_ID` - Your Telegram chat ID (security)
-- `TELEGRAM_TOPIC_ID` - Topic filter (for multi-persona groups)
 - `ELEVENLABS_API_KEY` - ElevenLabs API key
+- `ANTHROPIC_API_KEY` - Anthropic API key for Claude
 - `ELEVENLABS_VOICE_ID` - Voice selection
 - `PERSONA_NAME` - Display name in logs
 - `SYSTEM_PROMPT_FILE` - Path to persona prompt
@@ -278,44 +268,17 @@ Docker volumes store persistent data:
 
 | Volume | Contents | Location |
 |--------|----------|----------|
-| `v-state` | V session history & settings | `/home/claude/state` |
-| `v-sandbox` | V file operations sandbox | `/home/claude/sandbox` |
-| `tc-state` | TC session history & settings | `/home/claude/state` |
-| `tc-sandbox` | TC file operations sandbox | `/home/claude/sandbox` |
+| `assistant-state` | Session history & settings | `/home/claude/state` |
+| `assistant-sandbox` | File operations sandbox | `/home/claude/sandbox` |
 
 **Backup state:**
 ```bash
 # Export session data
-docker cp claude-voice-v:/home/claude/state ./backup-v-state
+docker cp claude-voice-assistant:/home/claude/state ./backup-state
 
 # Import session data
-docker cp ./backup-v-state/. claude-voice-v:/home/claude/state
-docker-compose restart v
-```
-
-### Adding More Personas
-
-Edit `docker-compose.yml`:
-
-```yaml
-  new-persona:
-    build: .
-    container_name: claude-voice-new
-    env_file:
-      - docker/new.env
-    volumes:
-      - new-state:/home/claude/state
-      - new-sandbox:/home/claude/sandbox
-      - ./prompts:/home/claude/app/prompts:ro
-    restart: unless-stopped
-    networks:
-      - voice-assistants
-
-volumes:
-  new-state:
-    driver: local
-  new-sandbox:
-    driver: local
+docker cp ./backup-state/. claude-voice-assistant:/home/claude/state
+docker-compose restart assistant
 ```
 
 ### Health Checks

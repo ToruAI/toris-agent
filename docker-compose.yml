@@ -1,23 +1,28 @@
-version: '3.8'
-
-# Claude Voice Assistant - Docker Compose Configuration
-# Runs multiple persona instances with isolated state and sandboxes
+# Claude Voice Assistant - Docker Compose
+#
+# Quick start:
+#   cp docker/assistant.env.example docker/assistant.env
+#   # Edit docker/assistant.env with your API keys
+#   docker-compose up -d
+#
+# Logs:
+#   docker-compose logs -f assistant
+#
+# Multiple personas:
+#   Duplicate the service block with different env_file and volume names
 
 services:
-  # ==========================================================================
-  # V Persona - General Purpose Assistant
-  # ==========================================================================
-  v:
+  assistant:
     build: .
-    container_name: claude-voice-v
+    container_name: claude-voice-assistant
     env_file:
-      - docker/v.env
+      - docker/assistant.env
     volumes:
-      # Persistent state (session history, settings)
-      - v-state:/home/claude/state
-      # Isolated sandbox for file operations
-      - v-sandbox:/home/claude/sandbox
-      # Shared prompts directory (read-only)
+      # Persistent state (session history, user settings)
+      - assistant-state:/home/claude/state
+      # Sandbox for Claude file operations
+      - assistant-sandbox:/home/claude/sandbox
+      # Prompts directory (read-only)
       - ./prompts:/home/claude/app/prompts:ro
     restart: unless-stopped
     healthcheck:
@@ -26,53 +31,7 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
-    networks:
-      - voice-assistants
 
-  # ==========================================================================
-  # TC Persona - TORIS Copilot
-  # ==========================================================================
-  tc:
-    build: .
-    container_name: claude-voice-tc
-    env_file:
-      - docker/tc.env
-    volumes:
-      # Persistent state (session history, settings)
-      - tc-state:/home/claude/state
-      # Isolated sandbox for file operations
-      - tc-sandbox:/home/claude/sandbox
-      # Shared prompts directory (read-only)
-      - ./prompts:/home/claude/app/prompts:ro
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "pgrep", "-f", "python.*bot.py"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-    networks:
-      - voice-assistants
-
-# ==============================================================================
-# Named Volumes - Persistent Storage
-# ==============================================================================
 volumes:
-  # V persona volumes
-  v-state:
-    driver: local
-  v-sandbox:
-    driver: local
-
-  # TC persona volumes
-  tc-state:
-    driver: local
-  tc-sandbox:
-    driver: local
-
-# ==============================================================================
-# Networks
-# ==============================================================================
-networks:
-  voice-assistants:
-    driver: bridge
+  assistant-state:
+  assistant-sandbox:
