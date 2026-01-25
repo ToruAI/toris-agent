@@ -8,8 +8,9 @@
 # Logs:
 #   docker-compose logs -f toris
 #
-# Multiple personas:
-#   Duplicate the service block with different env_file and volume names
+# Authentication options:
+#   1. API Key: Set ANTHROPIC_API_KEY in docker/toris.env
+#   2. Subscription: Uncomment the credentials mount below after running 'claude /login' on host
 
 services:
   toris:
@@ -24,6 +25,11 @@ services:
       - toris-sandbox:/home/claude/sandbox
       # Prompts directory (read-only)
       - ./prompts:/home/claude/app/prompts:ro
+      # Claude credentials persistence
+      - toris-claude-config:/home/claude/.claude
+      # OPTIONAL: Mount host credentials for subscription users
+      # Uncomment after running 'claude /login' on your host machine
+      # - ~/.claude/.credentials.json:/home/claude/.claude/.credentials.json:ro
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "pgrep", "-f", "python.*bot.py"]
@@ -35,3 +41,4 @@ services:
 volumes:
   toris-state:
   toris-sandbox:
+  toris-claude-config:

@@ -43,6 +43,37 @@ from claude_agent_sdk.types import (
 load_dotenv()
 
 
+def check_claude_auth() -> tuple[bool, str]:
+    """Check if Claude authentication is configured.
+
+    Returns:
+        (is_authenticated, auth_method) - auth_method is 'api_key', 'oauth', or 'none'
+    """
+    # Method 1: API Key
+    if os.getenv("ANTHROPIC_API_KEY"):
+        return True, "api_key"
+
+    # Method 2: OAuth credentials file
+    credentials_path = Path.home() / ".claude" / ".credentials.json"
+    if credentials_path.exists():
+        try:
+            import time
+            creds = json.loads(credentials_path.read_text())
+            oauth = creds.get("claudeAiOauth", {})
+            if oauth.get("accessToken"):
+                # Check if not expired (with 5 min buffer)
+                expires_at = oauth.get("expiresAt", 0)
+                if expires_at > (time.time() * 1000 + 300000):
+                    return True, "oauth"
+                # Expired but has refresh token - Claude SDK will handle refresh
+                if oauth.get("refreshToken"):
+                    return True, "oauth"
+        except (json.JSONDecodeError, KeyError):
+            pass
+
+    return False, "none"
+
+
 def validate_environment():
     """Validate required environment variables on startup."""
     required = {
@@ -72,6 +103,26 @@ def validate_environment():
     if chat_id == "0":
         print("WARNING: TELEGRAM_DEFAULT_CHAT_ID is 0 - bot will accept all messages")
         print("         Set this to your chat ID to restrict access")
+
+    # Check Claude authentication
+    is_auth, auth_method = check_claude_auth()
+    if not is_auth:
+        print("ERROR: Claude authentication not configured.")
+        print("")
+        print("Choose one of these methods:")
+        print("")
+        print("  METHOD 1: API Key (recommended for Docker)")
+        print("    Set ANTHROPIC_API_KEY in your .env file")
+        print("    Get key from: https://console.anthropic.com")
+        print("")
+        print("  METHOD 2: Claude Subscription (Pro/Max/Teams)")
+        print("    1. Run 'claude /login' on your host machine")
+        print("    2. Mount credentials in docker-compose.yml:")
+        print("       - ~/.claude/.credentials.json:/home/claude/.claude/.credentials.json:ro")
+        print("")
+        exit(1)
+    else:
+        print(f"Claude auth: {auth_method}")
 
 
 # Setup logging with configurable level

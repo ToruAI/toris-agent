@@ -70,6 +70,7 @@ Telegram Voice Message
 
 - **Telegram Bot** - Create one via [@BotFather](https://t.me/botfather)
 - **ElevenLabs account** - API key from [elevenlabs.io](https://elevenlabs.io)
+- **Claude Access** - Choose one authentication method (see below)
 
 For Docker deployment:
 - **Docker** and **Docker Compose**
@@ -77,6 +78,25 @@ For Docker deployment:
 For non-Docker deployment:
 - **Python 3.12+**
 - **Node.js 20+** (for Claude Code CLI)
+
+### Claude Authentication
+
+Choose ONE of these methods:
+
+| Method | Best For | Setup |
+|--------|----------|-------|
+| **API Key** | Docker, CI/CD, teams | Set `ANTHROPIC_API_KEY` from [console.anthropic.com](https://console.anthropic.com) |
+| **Subscription** | Personal use, Pro/Max/Teams plans | Run `claude /login` once, mount credentials |
+
+**API Key Method:**
+- Uses pre-paid API credits
+- Set `ANTHROPIC_API_KEY` in your env file
+- Works immediately in Docker
+
+**Subscription Method (Pro/Max/Teams):**
+- Uses your Claude subscription
+- No API key needed
+- For Docker: login on host first, then mount credentials
 
 ## Deployment Options
 
@@ -92,9 +112,14 @@ Best for production deployment with automatic restarts and isolation.
 git clone --recurse-submodules https://github.com/toruai/toris-claude-voice-assistant.git
 cd toris-claude-voice-assistant
 
-# Configure your toris
+# Configure
 cp docker/toris.env.example docker/toris.env
-# Edit docker/toris.env with your API keys
+# Edit docker/toris.env with your settings
+
+# Choose authentication method:
+# Option A: Add ANTHROPIC_API_KEY to docker/toris.env
+# Option B: Login with subscription, then uncomment credentials mount in docker-compose.yml
+#           claude /login  # Run on host first
 
 # Start
 docker-compose up -d
@@ -191,30 +216,40 @@ Run multiple AI personalities from the same codebase. Each gets its own:
 - Sandbox directory
 - Topic filter (for group chats)
 
-### Directory Structure
+### Docker Multi-Persona
 
+Duplicate the service in `docker-compose.yml` with different env files:
+
+```yaml
+services:
+  toris:
+    env_file: docker/toris.env
+    volumes:
+      - toris-state:/home/claude/state
+      - toris-sandbox:/home/claude/sandbox
+
+  assistant2:
+    env_file: docker/assistant2.env
+    volumes:
+      - assistant2-state:/home/claude/state
+      - assistant2-sandbox:/home/claude/sandbox
 ```
-/home/youruser/voice-agents/
-├── v.env              # V persona config
-├── tc.env             # TC persona config
-└── sandboxes/
-    ├── v/             # V's isolated sandbox
-    └── tc/            # TC's isolated sandbox
-```
 
-### Example Persona Prompt
+### Persona Prompt
 
-See `prompts/v.md` for a full example. Key elements:
+See `prompts/toris.md` for the default TORIS persona. Key elements:
 
 ```markdown
-You are V, a brilliant and slightly cynical voice toris.
+# TORIS - Your Second Brain
 
-## Your capabilities:
-- You can READ files from anywhere in {read_dir}
-- You can WRITE and EXECUTE only in {sandbox_dir}
-- You have WebSearch for current information
+You are TORIS, a voice-powered thinking partner built on Claude.
 
-## CRITICAL - Voice output rules:
+## Your Capabilities
+- READ files from {read_dir}
+- WRITE and EXECUTE in {sandbox_dir}
+- Web search, research, note-taking via MEGG
+
+## CRITICAL - Voice Output Rules
 - NO markdown formatting
 - Speak in natural flowing sentences
 ```
@@ -257,10 +292,28 @@ cp docker/toris.env.example docker/toris.env
 - `TELEGRAM_BOT_TOKEN` - Bot token from @BotFather
 - `TELEGRAM_DEFAULT_CHAT_ID` - Your Telegram chat ID (security)
 - `ELEVENLABS_API_KEY` - ElevenLabs API key
-- `ANTHROPIC_API_KEY` - Anthropic API key for Claude
+- `ANTHROPIC_API_KEY` - Anthropic API key (optional if using subscription)
 - `ELEVENLABS_VOICE_ID` - Voice selection
 - `PERSONA_NAME` - Display name in logs
 - `SYSTEM_PROMPT_FILE` - Path to persona prompt
+- `MAX_VOICE_RESPONSE_CHARS` - Max TTS characters (default: 2000)
+
+### Authentication
+
+**Option 1: API Key** (recommended)
+```bash
+# Add to docker/toris.env
+ANTHROPIC_API_KEY=sk-ant-...
+```
+
+**Option 2: Claude Subscription**
+```bash
+# 1. Login on host machine
+claude /login
+
+# 2. Uncomment in docker-compose.yml volumes:
+- ~/.claude/.credentials.json:/home/claude/.claude/.credentials.json:ro
+```
 
 ### Data Persistence
 
@@ -270,6 +323,7 @@ Docker volumes store persistent data:
 |--------|----------|----------|
 | `toris-state` | Session history & settings | `/home/claude/state` |
 | `toris-sandbox` | File operations sandbox | `/home/claude/sandbox` |
+| `toris-claude-config` | Claude credentials & settings | `/home/claude/.claude` |
 
 **Backup state:**
 ```bash
