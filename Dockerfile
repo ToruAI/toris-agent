@@ -43,6 +43,9 @@ RUN python3.12 -m venv .venv && \
 COPY --chown=claude:claude bot.py .
 COPY --chown=claude:claude prompts/ ./prompts/
 
+# Copy Claude settings (agents, skills, config from toru-claude-settings submodule)
+COPY --chown=claude:claude .claude-settings/ /home/claude/.claude/
+
 # Create necessary directories
 RUN mkdir -p /home/claude/sandbox /home/claude/state
 

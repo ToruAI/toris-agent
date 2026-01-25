@@ -89,7 +89,7 @@ Best for production deployment with automatic restarts and isolation.
 **Quick Start:**
 ```bash
 # Clone the repository
-git clone https://github.com/toruai/toris-claude-voice-assistant.git
+git clone --recurse-submodules https://github.com/toruai/toris-claude-voice-assistant.git
 cd toris-claude-voice-assistant
 
 # Configure your toris
@@ -131,7 +131,7 @@ Best for development or single-persona deployments on Linux.
 **Quick Start:**
 ```bash
 # Clone and setup
-git clone https://github.com/toruai/toris-claude-voice-assistant.git
+git clone --recurse-submodules https://github.com/toruai/toris-claude-voice-assistant.git
 cd toris-claude-voice-assistant
 python -m venv .venv
 source .venv/bin/activate
@@ -307,7 +307,7 @@ mkdir -p /opt/toris-claude-voice-assistant
 cd /opt/toris-claude-voice-assistant
 
 # Clone and install
-git clone https://github.com/toruai/toris-claude-voice-assistant.git .
+git clone --recurse-submodules https://github.com/toruai/toris-claude-voice-assistant.git .
 python3.12 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 
