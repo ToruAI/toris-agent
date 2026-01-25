@@ -136,6 +136,7 @@ docker-compose down
 - Automatic restarts on failure
 - No Python/Node installation needed
 - Persistent state across restarts
+- Toru agents and skills pre-installed (Garry, Bob, Sentinel, Scout, etc.)
 
 **Directory Structure:**
 ```
@@ -165,6 +166,9 @@ pip install -r requirements.txt
 # Install Claude Code CLI
 npm install -g @anthropic-ai/claude-code
 
+# Install Toru agents and skills (optional but recommended)
+cd .claude-settings && ./install.sh && cd ..
+
 # Configure
 cp .env.example .env
 # Edit .env with your values
@@ -172,6 +176,8 @@ cp .env.example .env
 # Run
 python bot.py
 ```
+
+The agents install adds 7 specialized AI agents (Garry, Bob, Sentinel, Scout, etc.) and 14 skills like `/dev-cycle` and `/scout`. See [toru-claude-agents](https://github.com/ToruAI/toru-claude-agents) for details.
 
 See [Systemd Deployment Guide](#systemd-deployment-guide) for production setup.
 
