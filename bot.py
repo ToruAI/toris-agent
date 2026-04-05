@@ -468,6 +468,17 @@ def get_mcp_status(settings_file: str) -> list[str]:
     return lines
 
 
+def load_mcp_servers() -> dict:
+    """Read mcpServers from CLAUDE_SETTINGS_FILE for use in ClaudeAgentOptions.mcp_servers."""
+    if not CLAUDE_SETTINGS_FILE:
+        return {}
+    try:
+        data = json.loads(Path(CLAUDE_SETTINGS_FILE).read_text())
+        return data.get("mcpServers", {})
+    except (json.JSONDecodeError, IOError, OSError):
+        return {}
+
+
 def get_user_state(user_id: int) -> dict:
     """Get or create user state."""
     user_id_str = str(user_id)
@@ -759,6 +770,8 @@ async def call_claude(
     # Build SDK options
     # In approve mode: don't pre-allow tools - let can_use_tool callback handle each one
     # In go_all mode: pre-allow all tools for no prompts
+    mcp_servers = load_mcp_servers()
+
     if mode == "approve":
         logger.debug(f">>> APPROVE MODE: Setting up can_use_tool callback")
         options = ClaudeAgentOptions(
@@ -767,18 +780,21 @@ async def call_claude(
             can_use_tool=can_use_tool,
             permission_mode="default",
             add_dirs=[CLAUDE_WORKING_DIR],
+            mcp_servers=mcp_servers,
         )
         if CLAUDE_SETTINGS_FILE:
             options.settings_file = CLAUDE_SETTINGS_FILE
         logger.debug(f">>> Options: can_use_tool={options.can_use_tool is not None}, permission_mode={options.permission_mode}")
     else:
         logger.debug(f">>> GO_ALL MODE: Pre-allowing all tools")
+        megg_tools = [f"mcp__{name}__{t}" for name in mcp_servers for t in
+                      ("state", "context", "learn", "maintain", "init")] if mcp_servers else []
         options = ClaudeAgentOptions(
             system_prompt=dynamic_persona,
-            allowed_tools=["Read", "Grep", "Glob", "WebSearch", "WebFetch", "Task", "Bash", "Edit", "Write", "Skill",
-                           "mcp__megg__state", "mcp__megg__context", "mcp__megg__learn", "mcp__megg__maintain", "mcp__megg__init"],
+            allowed_tools=["Read", "Grep", "Glob", "WebSearch", "WebFetch", "Task", "Bash", "Edit", "Write", "Skill"] + megg_tools,
             cwd=SANDBOX_DIR,
             add_dirs=[CLAUDE_WORKING_DIR],
+            mcp_servers=mcp_servers,
         )
         if CLAUDE_SETTINGS_FILE:
             options.settings_file = CLAUDE_SETTINGS_FILE
