@@ -435,3 +435,51 @@ class TestPhotoHandler:
         assert filename.startswith("photo_")
         assert filename.endswith(".jpg")
         assert len(filename) == len("photo_20260405_120000.jpg")
+
+
+class TestCancellation:
+    """Test cancellation event logic."""
+
+    def test_cancel_event_initial_state(self):
+        """A new asyncio.Event is not set."""
+        event = asyncio.Event()
+        assert not event.is_set()
+
+    def test_cancel_event_set_and_check(self):
+        """Setting an event makes is_set() return True."""
+        event = asyncio.Event()
+        event.set()
+        assert event.is_set()
+
+    def test_cancel_event_clear_resets(self):
+        """Clearing an event makes is_set() return False again."""
+        event = asyncio.Event()
+        event.set()
+        event.clear()
+        assert not event.is_set()
+
+    def test_cancel_events_dict_per_user(self):
+        """cancel_events dict tracks separate events per user_id."""
+        cancel_events = {}
+
+        # Simulate start of call_claude for user 123
+        user_id = 123
+        if user_id not in cancel_events:
+            cancel_events[user_id] = asyncio.Event()
+        cancel_events[user_id].clear()
+
+        assert not cancel_events[123].is_set()
+
+        # Simulate /cancel
+        cancel_events[123].set()
+        assert cancel_events[123].is_set()
+
+        # Different user not affected
+        assert 456 not in cancel_events
+
+    def test_cancel_no_effect_on_already_cancelled(self):
+        """Setting an already-set event is idempotent."""
+        event = asyncio.Event()
+        event.set()
+        event.set()  # Should not raise
+        assert event.is_set()

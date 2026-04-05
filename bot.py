@@ -335,6 +335,9 @@ def check_rate_limit(user_id: int) -> tuple[bool, str]:
 # Pending tool approvals: {approval_id: {"event": asyncio.Event, "approved": bool, "tool_name": str, "input": dict}}
 pending_approvals = {}
 
+# Cancellation events per user — set by /cancel to interrupt active call_claude
+cancel_events: dict[int, asyncio.Event] = {}
+
 # State files for persistence
 STATE_FILE = Path(__file__).parent / "sessions_state.json"
 SETTINGS_FILE = Path(__file__).parent / "user_settings.json"
@@ -751,11 +754,24 @@ async def call_claude(
     metadata = {}
     tool_count = 0
 
+    # Set up cancellation tracking for this user
+    user_id_for_cancel = update.effective_user.id if update else None
+    if user_id_for_cancel is not None:
+        if user_id_for_cancel not in cancel_events:
+            cancel_events[user_id_for_cancel] = asyncio.Event()
+        cancel_events[user_id_for_cancel].clear()  # Reset at start of each call
+
     try:
         logger.debug(f">>> Starting ClaudeSDKClient with prompt: {len(full_prompt)} chars")
         async with ClaudeSDKClient(options=options) as client:
             await client.query(full_prompt)
             async for message in client.receive_response():
+                # Check for user cancellation
+                if user_id_for_cancel is not None and cancel_events.get(user_id_for_cancel, asyncio.Event()).is_set():
+                    logger.debug(f"Call cancelled by user {user_id_for_cancel}")
+                    result_text = (result_text + "\n\n[Cancelled]").strip()
+                    break
+
                 # Handle different message types
                 logger.debug(f">>> SDK message type: {type(message).__name__}")
                 if isinstance(message, AssistantMessage):
@@ -855,6 +871,23 @@ async def cmd_new(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("New session started. Send a voice message to begin.")
 
     save_state()
+
+
+async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /cancel command — interrupt active Claude request."""
+    if not should_handle_message(update.message.message_thread_id):
+        return
+
+    if not _is_authorized(update):
+        return
+
+    user_id = update.effective_user.id
+    event = cancel_events.get(user_id)
+    if event is not None and not event.is_set():
+        event.set()
+        await update.message.reply_text("Cancelling...")
+    else:
+        await update.message.reply_text("No active request to cancel.")
 
 
 async def cmd_continue(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1623,6 +1656,7 @@ def main():
     # Commands
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("new", cmd_new))
+    app.add_handler(CommandHandler("cancel", cmd_cancel))
     app.add_handler(CommandHandler("continue", cmd_continue))
     app.add_handler(CommandHandler("sessions", cmd_sessions))
     app.add_handler(CommandHandler("switch", cmd_switch))
@@ -1650,6 +1684,7 @@ def main():
     async def post_init(application):
         await application.bot.set_my_commands([
             BotCommand("new",      "Start a new session"),
+            BotCommand("cancel",   "Cancel current request"),
             BotCommand("continue", "Continue last session"),
             BotCommand("sessions", "List recent sessions"),
             BotCommand("switch",   "Switch to a session by ID"),
