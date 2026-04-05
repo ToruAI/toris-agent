@@ -1530,6 +1530,82 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await processing_msg.edit_text(f"Error: {e}")
 
 
+# ============ Photo Handler ============
+
+async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle incoming photo messages — save to sandbox and let Claude view them."""
+    if update.effective_user.is_bot is True:
+        return
+
+    logger.debug(f"PHOTO received from user {update.effective_user.id}, chat {update.effective_chat.id}")
+
+    if not should_handle_message(update.message.message_thread_id):
+        logger.debug(f"Ignoring photo - not in our topic")
+        return
+
+    if not _is_authorized(update):
+        return
+
+    user_id = update.effective_user.id
+
+    allowed, rate_msg = check_rate_limit(user_id)
+    if not allowed:
+        await update.message.reply_text(rate_msg)
+        return
+
+    state = get_user_state(user_id)
+    settings = get_user_settings(user_id)
+
+    processing_msg = await update.message.reply_text("Processing photo...")
+
+    try:
+        # Get highest resolution photo
+        photo = update.message.photo[-1]
+        photo_file = await photo.get_file()
+
+        # Save to sandbox
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        photo_path = Path(SANDBOX_DIR) / f"photo_{timestamp}.jpg"
+        await photo_file.download_to_drive(str(photo_path))
+
+        # Build prompt
+        caption = update.message.caption or ""
+        if caption:
+            prompt = f"I sent you a photo. It's saved at: {photo_path}\n\nMy message: {caption}"
+        else:
+            prompt = f"I sent you a photo. It's saved at: {photo_path}\n\nPlease look at it and describe what you see, or help me with whatever is shown."
+
+        await processing_msg.edit_text("Asking Claude...")
+
+        continue_last = state["current_session"] is not None
+        response, new_session_id, metadata = await call_claude(
+            prompt,
+            session_id=state["current_session"],
+            continue_last=continue_last,
+            user_settings=settings,
+            update=update,
+            context=context,
+        )
+
+        if new_session_id and new_session_id != state["current_session"]:
+            state["current_session"] = new_session_id
+            if new_session_id not in state["sessions"]:
+                state["sessions"].append(new_session_id)
+            save_state()
+
+        await send_long_message(update, processing_msg, response)
+
+        if settings["audio_enabled"]:
+            tts_text = response[:MAX_VOICE_CHARS] if len(response) > MAX_VOICE_CHARS else response
+            audio = await text_to_speech(tts_text, speed=settings["voice_speed"])
+            if audio:
+                await update.message.reply_voice(voice=audio)
+
+    except Exception as e:
+        logger.error(f"Error in handle_photo: {e}")
+        await processing_msg.edit_text(f"Error: {e}")
+
+
 def main():
     """Main entry point."""
     # Apply any saved credentials first (from previous /setup)
@@ -1565,6 +1641,7 @@ def main():
     # Messages
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
 
     # Ensure sandbox exists at startup
     Path(SANDBOX_DIR).mkdir(parents=True, exist_ok=True)

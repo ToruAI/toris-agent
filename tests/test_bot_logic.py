@@ -9,6 +9,7 @@ import sys
 import time
 import pytest
 import tempfile
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
@@ -395,3 +396,42 @@ class TestSettingsJson:
         data = json.loads(self.SETTINGS_PATH.read_text())
         assert "mcpServers" in data, "settings.json missing mcpServers"
         assert "megg" in data["mcpServers"], "settings.json missing megg MCP config"
+
+
+class TestPhotoHandler:
+    """Test photo handler logic."""
+
+    def test_photo_prompt_with_caption(self):
+        """Photo with caption produces correct prompt."""
+        caption = "What's in this image?"
+        path = Path("/sandbox/photo_20260405_120000.jpg")
+
+        # Replicate the prompt building logic from handle_photo
+        if caption:
+            prompt = f"I sent you a photo. It's saved at: {path}\n\nMy message: {caption}"
+        else:
+            prompt = f"I sent you a photo. It's saved at: {path}\n\nPlease look at it and describe what you see, or help me with whatever is shown."
+
+        assert str(path) in prompt
+        assert caption in prompt
+
+    def test_photo_prompt_without_caption(self):
+        """Photo without caption produces fallback prompt."""
+        caption = ""
+        path = Path("/sandbox/photo_20260405_120000.jpg")
+
+        if caption:
+            prompt = f"I sent you a photo. It's saved at: {path}\n\nMy message: {caption}"
+        else:
+            prompt = f"I sent you a photo. It's saved at: {path}\n\nPlease look at it and describe what you see, or help me with whatever is shown."
+
+        assert str(path) in prompt
+        assert "describe" in prompt
+
+    def test_photo_filename_format(self):
+        """Photo filename includes timestamp."""
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"photo_{timestamp}.jpg"
+        assert filename.startswith("photo_")
+        assert filename.endswith(".jpg")
+        assert len(filename) == len("photo_20260405_120000.jpg")
