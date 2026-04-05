@@ -389,13 +389,12 @@ class TestSettingsJson:
         data = json.loads(content)
         assert isinstance(data, dict)
 
-    def test_settings_json_has_megg_if_exists(self):
-        """settings.json should contain MEGG MCP if it exists."""
+    def test_settings_json_has_permissions_if_exists(self):
+        """settings.json should contain permissions block if it exists."""
         if not self.SETTINGS_PATH.exists():
             pytest.skip("settings.json not present (expected in local dev only)")
         data = json.loads(self.SETTINGS_PATH.read_text())
-        assert "mcpServers" in data, "settings.json missing mcpServers"
-        assert "megg" in data["mcpServers"], "settings.json missing megg MCP config"
+        assert "permissions" in data, "settings.json missing permissions block"
 
 
 class TestPhotoHandler:
