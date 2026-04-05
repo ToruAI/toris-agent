@@ -890,6 +890,50 @@ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("No active request to cancel.")
 
 
+async def cmd_compact(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /compact command — summarize current session and start fresh."""
+    if not should_handle_message(update.message.message_thread_id):
+        return
+
+    if not _is_authorized(update):
+        return
+
+    user_id = update.effective_user.id
+    state = get_user_state(user_id)
+    settings = get_user_settings(user_id)
+
+    if not state.get("current_session"):
+        await update.message.reply_text("No active session to compact. Start a conversation first.")
+        return
+
+    processing_msg = await update.message.reply_text("Compacting session...")
+
+    try:
+        summary, _, _ = await call_claude(
+            "Summarize this entire conversation concisely but completely. Include: key topics, decisions, important files/code mentioned, and any ongoing work. Preserve all context needed to continue seamlessly.",
+            session_id=state["current_session"],
+            continue_last=True,
+            include_megg=False,
+            user_settings=settings,
+            update=update,
+            context=context,
+        )
+
+        # Save summary as pending context for next message, start fresh session
+        state["compact_summary"] = summary
+        state["current_session"] = None
+        save_state()
+
+        preview = summary[:400] + "..." if len(summary) > 400 else summary
+        await processing_msg.edit_text(
+            f"Session compacted. Summary:\n\n{preview}\n\nSend your next message to continue with this context."
+        )
+
+    except Exception as e:
+        logger.error(f"Error in cmd_compact: {e}")
+        await processing_msg.edit_text(f"Error compacting session: {e}")
+
+
 async def cmd_continue(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /continue command - resume last session."""
     if not should_handle_message(update.message.message_thread_id):
@@ -1464,6 +1508,12 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await processing_msg.edit_text(text)
             return
 
+        # Prepend compact summary if pending from /compact
+        compact_summary = state.pop("compact_summary", None)
+        if compact_summary:
+            text = f"<previous_session_summary>\n{compact_summary}\n</previous_session_summary>\n\n{text}"
+            save_state()
+
         # Show what was heard
         await processing_msg.edit_text(f"Heard: {text[:100]}{'...' if len(text) > 100 else ''}\n\nAsking Claude...")
 
@@ -1530,6 +1580,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     processing_msg = await update.message.reply_text("Asking Claude...")
     logger.debug("Sent processing acknowledgement")
+
+    # Prepend compact summary if pending from /compact
+    compact_summary = state.pop("compact_summary", None)
+    if compact_summary:
+        text = f"<previous_session_summary>\n{compact_summary}\n</previous_session_summary>\n\n{text}"
+        save_state()
 
     try:
         continue_last = state["current_session"] is not None
@@ -1608,6 +1664,12 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             prompt = f"I sent you a photo. It's saved at: {photo_path}\n\nPlease look at it and describe what you see, or help me with whatever is shown."
 
+        # Prepend compact summary if pending from /compact
+        compact_summary = state.pop("compact_summary", None)
+        if compact_summary:
+            prompt = f"<previous_session_summary>\n{compact_summary}\n</previous_session_summary>\n\n{prompt}"
+            save_state()
+
         await processing_msg.edit_text("Asking Claude...")
 
         continue_last = state["current_session"] is not None
@@ -1657,6 +1719,7 @@ def main():
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("new", cmd_new))
     app.add_handler(CommandHandler("cancel", cmd_cancel))
+    app.add_handler(CommandHandler("compact", cmd_compact))
     app.add_handler(CommandHandler("continue", cmd_continue))
     app.add_handler(CommandHandler("sessions", cmd_sessions))
     app.add_handler(CommandHandler("switch", cmd_switch))
@@ -1685,6 +1748,7 @@ def main():
         await application.bot.set_my_commands([
             BotCommand("new",      "Start a new session"),
             BotCommand("cancel",   "Cancel current request"),
+            BotCommand("compact",  "Summarize & compress current session"),
             BotCommand("continue", "Continue last session"),
             BotCommand("sessions", "List recent sessions"),
             BotCommand("switch",   "Switch to a session by ID"),

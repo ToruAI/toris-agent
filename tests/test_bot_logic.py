@@ -483,3 +483,68 @@ class TestCancellation:
         event.set()
         event.set()  # Should not raise
         assert event.is_set()
+
+
+class TestCompact:
+    """Test /compact session logic."""
+
+    def test_compact_summary_stored_in_state(self):
+        """compact_summary key gets saved to user state dict."""
+        state = {"current_session": "sess_abc", "sessions": ["sess_abc"]}
+        summary = "We discussed X, decided Y, working on Z."
+
+        # Simulate what cmd_compact does after getting summary
+        state["compact_summary"] = summary
+        state["current_session"] = None
+
+        assert state["compact_summary"] == summary
+        assert state["current_session"] is None
+
+    def test_compact_summary_prepended_to_next_message(self):
+        """compact_summary is injected into the next message prompt."""
+        state = {
+            "current_session": None,
+            "sessions": [],
+            "compact_summary": "Previous: discussed auth system.",
+        }
+        user_text = "Continue with the login form."
+
+        # Simulate what handlers do
+        compact_summary = state.pop("compact_summary", None)
+        if compact_summary:
+            text = f"<previous_session_summary>\n{compact_summary}\n</previous_session_summary>\n\n{user_text}"
+        else:
+            text = user_text
+
+        assert "<previous_session_summary>" in text
+        assert "Previous: discussed auth system." in text
+        assert "Continue with the login form." in text
+
+    def test_compact_summary_cleared_after_use(self):
+        """compact_summary is removed from state after being injected."""
+        state = {"compact_summary": "some summary", "current_session": None, "sessions": []}
+
+        compact_summary = state.pop("compact_summary", None)
+        assert compact_summary == "some summary"
+        assert "compact_summary" not in state
+
+    def test_compact_no_summary_no_injection(self):
+        """Without compact_summary, text is unchanged."""
+        state = {"current_session": None, "sessions": []}
+        user_text = "Hello"
+
+        compact_summary = state.pop("compact_summary", None)
+        if compact_summary:
+            text = f"<previous_session_summary>\n{compact_summary}\n</previous_session_summary>\n\n{user_text}"
+        else:
+            text = user_text
+
+        assert text == user_text
+
+    def test_compact_requires_active_session(self):
+        """compact should not proceed if no active session."""
+        state = {"current_session": None, "sessions": []}
+
+        # Simulate the guard in cmd_compact
+        has_session = bool(state.get("current_session"))
+        assert not has_session
