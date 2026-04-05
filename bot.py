@@ -6,6 +6,7 @@ Voice messages -> ElevenLabs Scribe -> Claude Code SDK -> ElevenLabs TTS -> Voic
 
 import os
 import subprocess
+import shutil
 import json
 import asyncio
 import logging
@@ -427,6 +428,42 @@ def apply_saved_credentials():
     # Re-resolve providers after credentials are loaded
     TTS_PROVIDER = resolve_provider("TTS_PROVIDER")
     STT_PROVIDER = resolve_provider("STT_PROVIDER")
+
+
+def get_mcp_status(settings_file: str) -> list[str]:
+    """Return list of status lines for MCP servers in settings file.
+
+    Pure function — no I/O side effects beyond reading the settings file.
+    """
+    if not settings_file:
+        return ["MCP: CLAUDE_SETTINGS_FILE not configured"]
+
+    settings_path = Path(settings_file)
+    if not settings_path.is_absolute():
+        settings_path = Path(__file__).parent / settings_file
+
+    if not settings_path.exists():
+        return [f"MCP config: settings file not found ({settings_file})"]
+
+    try:
+        settings_data = json.loads(settings_path.read_text())
+    except (json.JSONDecodeError, IOError) as e:
+        return [f"MCP config: ERROR reading settings - {e}"]
+
+    mcp_servers = settings_data.get("mcpServers", {})
+    if not mcp_servers:
+        return ["MCP Servers: none configured"]
+
+    lines = ["MCP Servers:"]
+    for name, config in mcp_servers.items():
+        cmd = config.get("command", "")
+        if cmd and shutil.which(cmd):
+            lines.append(f"  {name}: OK ({cmd})")
+        elif cmd:
+            lines.append(f"  {name}: MISSING ({cmd} not found in PATH)")
+        else:
+            lines.append(f"  {name}: misconfigured (no command)")
+    return lines
 
 
 def get_user_state(user_id: int) -> dict:
@@ -1087,6 +1124,9 @@ async def cmd_health(update: Update, context: ContextTypes.DEFAULT_TYPE):
     state = get_user_state(user_id)
     status.append(f"\nSessions: {len(state['sessions'])}")
     status.append(f"Current: {state['current_session'][:8] if state['current_session'] else 'None'}...")
+
+    # MCP servers status
+    status.extend(get_mcp_status(CLAUDE_SETTINGS_FILE))
 
     # Sandbox info
     status.append(f"\nSandbox: {SANDBOX_DIR}")

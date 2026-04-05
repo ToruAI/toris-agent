@@ -548,3 +548,167 @@ class TestCompact:
         # Simulate the guard in cmd_compact
         has_session = bool(state.get("current_session"))
         assert not has_session
+
+
+# ─────────────────────────────────────────────
+# TestMcpStatus
+# ─────────────────────────────────────────────
+
+class TestMcpStatus:
+    """Test MCP status helper function."""
+
+    def test_no_settings_file_configured(self, tmp_path):
+        """Empty CLAUDE_SETTINGS_FILE returns informative message."""
+        settings_file = ""
+        if not settings_file:
+            result = ["MCP: CLAUDE_SETTINGS_FILE not configured"]
+        assert result == ["MCP: CLAUDE_SETTINGS_FILE not configured"]
+
+    def test_settings_file_not_found(self, tmp_path):
+        """Nonexistent file returns not-found message."""
+        fake_path = str(tmp_path / "missing_settings.json")
+
+        from pathlib import Path
+        settings_path = Path(fake_path)
+        if not settings_path.is_absolute():
+            settings_path = Path(".") / fake_path
+
+        if not settings_path.exists():
+            result = [f"MCP config: settings file not found ({fake_path})"]
+
+        assert "not found" in result[0]
+
+    def test_settings_with_valid_mcp_command(self, tmp_path):
+        """Settings with npx (available) returns OK status."""
+        import shutil, json
+        settings = {
+            "mcpServers": {
+                "megg": {"command": "npx", "args": ["-y", "megg@latest"]}
+            }
+        }
+        settings_file = tmp_path / "settings.json"
+        settings_file.write_text(json.dumps(settings))
+
+        # Parse logic
+        data = json.loads(settings_file.read_text())
+        mcp_servers = data.get("mcpServers", {})
+        lines = ["MCP Servers:"]
+        for name, config in mcp_servers.items():
+            cmd = config.get("command", "")
+            if cmd and shutil.which(cmd):
+                lines.append(f"  {name}: OK ({cmd})")
+            elif cmd:
+                lines.append(f"  {name}: MISSING ({cmd} not found in PATH)")
+
+        # npx should be available in the test environment
+        if shutil.which("npx"):
+            assert any("OK" in line for line in lines)
+        else:
+            assert any("MISSING" in line for line in lines)
+
+    def test_settings_with_missing_command(self, tmp_path):
+        """Settings with unavailable command returns MISSING status."""
+        import shutil, json
+        settings = {
+            "mcpServers": {
+                "fake-tool": {"command": "this-binary-does-not-exist-xyz", "args": []}
+            }
+        }
+        settings_file = tmp_path / "settings.json"
+        settings_file.write_text(json.dumps(settings))
+
+        data = json.loads(settings_file.read_text())
+        mcp_servers = data.get("mcpServers", {})
+        lines = ["MCP Servers:"]
+        for name, config in mcp_servers.items():
+            cmd = config.get("command", "")
+            if cmd and shutil.which(cmd):
+                lines.append(f"  {name}: OK ({cmd})")
+            elif cmd:
+                lines.append(f"  {name}: MISSING ({cmd} not found in PATH)")
+
+        assert any("MISSING" in line for line in lines)
+
+    def test_settings_empty_mcp_servers(self, tmp_path):
+        """Settings with empty mcpServers returns 'none configured'."""
+        import json
+        settings = {"permissions": {"allow": []}, "mcpServers": {}}
+        settings_file = tmp_path / "settings.json"
+        settings_file.write_text(json.dumps(settings))
+
+        data = json.loads(settings_file.read_text())
+        mcp_servers = data.get("mcpServers", {})
+        if not mcp_servers:
+            result = ["MCP Servers: none configured"]
+
+        assert result == ["MCP Servers: none configured"]
+
+    def test_corrupted_settings_file(self, tmp_path):
+        """Corrupted settings.json returns error message."""
+        settings_file = tmp_path / "settings.json"
+        settings_file.write_text("{invalid json{{")
+
+        try:
+            import json
+            json.loads(settings_file.read_text())
+            result = []
+        except json.JSONDecodeError as e:
+            result = [f"MCP config: ERROR reading settings - {e}"]
+
+        assert len(result) == 1
+        assert "ERROR" in result[0]
+
+    def test_get_mcp_status_no_settings(self):
+        """bot.get_mcp_status with empty string returns not-configured message."""
+        result = bot.get_mcp_status("")
+        assert result == ["MCP: CLAUDE_SETTINGS_FILE not configured"]
+
+    def test_get_mcp_status_missing_file(self, tmp_path):
+        """bot.get_mcp_status with nonexistent path returns not-found message."""
+        fake = str(tmp_path / "nosuchfile.json")
+        result = bot.get_mcp_status(fake)
+        assert len(result) == 1
+        assert "not found" in result[0]
+
+    def test_get_mcp_status_valid_settings(self, tmp_path):
+        """bot.get_mcp_status with real settings file returns structured lines."""
+        import shutil as _shutil
+        settings = {
+            "mcpServers": {
+                "fake-xyz": {"command": "this-binary-does-not-exist-xyz", "args": []},
+            }
+        }
+        settings_file = tmp_path / "settings.json"
+        settings_file.write_text(json.dumps(settings))
+
+        result = bot.get_mcp_status(str(settings_file))
+        assert result[0] == "MCP Servers:"
+        assert any("fake-xyz" in line for line in result)
+        assert any("MISSING" in line for line in result)
+
+    def test_get_mcp_status_corrupted_json(self, tmp_path):
+        """bot.get_mcp_status with bad JSON returns error line."""
+        settings_file = tmp_path / "settings.json"
+        settings_file.write_text("{not valid json{{")
+
+        result = bot.get_mcp_status(str(settings_file))
+        assert len(result) == 1
+        assert "ERROR" in result[0]
+
+    def test_get_mcp_status_empty_servers(self, tmp_path):
+        """bot.get_mcp_status with empty mcpServers returns 'none configured'."""
+        settings_file = tmp_path / "settings.json"
+        settings_file.write_text(json.dumps({"mcpServers": {}}))
+
+        result = bot.get_mcp_status(str(settings_file))
+        assert result == ["MCP Servers: none configured"]
+
+    def test_get_mcp_status_no_command_field(self, tmp_path):
+        """MCP server entry with no command field returns misconfigured."""
+        settings_file = tmp_path / "settings.json"
+        settings_file.write_text(json.dumps({
+            "mcpServers": {"broken": {"args": []}}
+        }))
+
+        result = bot.get_mcp_status(str(settings_file))
+        assert any("misconfigured" in line for line in result)
