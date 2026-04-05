@@ -720,7 +720,7 @@ async def call_claude(
     dynamic_persona = build_dynamic_prompt(user_settings)
 
     logger.debug(f"Calling Claude SDK: prompt={len(prompt)} chars, continue={continue_last}, session={session_id[:8] if session_id else 'new'}...")
-    logger.debug(f"Mode: {mode}, Watch: {watch_enabled}")
+    logger.debug(f"Mode: {mode}, Watch: {watch_mode}")
     logger.debug(f"Working dir: {SANDBOX_DIR} (sandbox)")
 
     # Track tool approvals for this call
