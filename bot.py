@@ -657,6 +657,7 @@ async def call_claude(
     user_settings: dict = None,
     update: Update = None,
     context: ContextTypes.DEFAULT_TYPE = None,
+    processing_msg=None,
 ) -> tuple[str, str, dict]:
     """
     Call Claude Code SDK and return (response, session_id, metadata).
@@ -790,6 +791,7 @@ async def call_claude(
     new_session_id = session_id
     metadata = {}
     tool_count = 0
+    tool_log: list[str] = []  # Running list of tool names used
 
     # Set up cancellation tracking for this user
     user_id_for_cancel = update.effective_user.id if update else None
@@ -817,27 +819,34 @@ async def call_claude(
                             result_text += block.text
                         elif isinstance(block, ToolUseBlock):
                             tool_count += 1
-                            if watch_enabled and update:
-                                # Stream tool call to Telegram with details
-                                tool_input = block.input or {}
-                                # Extract key info based on tool type
-                                if block.name == "Bash" and "command" in tool_input:
-                                    cmd = tool_input["command"]
-                                    detail = cmd[:80] + "..." if len(cmd) > 80 else cmd
-                                elif block.name == "Read" and "file_path" in tool_input:
-                                    detail = tool_input["file_path"]
-                                elif block.name == "Edit" and "file_path" in tool_input:
-                                    detail = tool_input["file_path"]
-                                elif block.name == "Write" and "file_path" in tool_input:
-                                    detail = tool_input["file_path"]
-                                elif block.name == "Grep" and "pattern" in tool_input:
-                                    detail = f"/{tool_input['pattern']}/"
-                                elif block.name == "Glob" and "pattern" in tool_input:
-                                    detail = tool_input["pattern"]
-                                else:
-                                    detail = None
+                            # Build short label for this tool
+                            tool_input = block.input or {}
+                            if block.name == "Bash" and "command" in tool_input:
+                                cmd = tool_input["command"]
+                                label = f"Bash: {cmd[:60]}{'...' if len(cmd)>60 else ''}"
+                            elif block.name in ("Read", "Edit", "Write") and "file_path" in tool_input:
+                                label = f"{block.name}: {tool_input['file_path']}"
+                            elif block.name == "Grep" and "pattern" in tool_input:
+                                label = f"Grep: /{tool_input['pattern']}/"
+                            elif block.name == "Glob" and "pattern" in tool_input:
+                                label = f"Glob: {tool_input['pattern']}"
+                            elif block.name.startswith("mcp__"):
+                                label = block.name.replace("mcp__", "")
+                            else:
+                                label = block.name
+                            tool_log.append(f"⚙ {label}")
 
-                                tool_msg = f"{block.name}: {detail}" if detail else f"Using: {block.name}"
+                            # Edit processing_msg with live status (always, not just watch mode)
+                            if processing_msg is not None:
+                                try:
+                                    status_text = "Asking Claude...\n" + "\n".join(tool_log[-5:])
+                                    await processing_msg.edit_text(status_text)
+                                except Exception:
+                                    pass  # Ignore edit failures (rate limits, etc.)
+
+                            # Watch mode: also send separate message (existing behavior)
+                            if watch_enabled and update:
+                                tool_msg = f"{block.name}: {tool_input.get('command', tool_input.get('file_path', tool_input.get('pattern', '')))[:80]}" if tool_input else f"Using: {block.name}"
                                 try:
                                     await update.message.reply_text(tool_msg)
                                 except Exception as e:
@@ -1566,6 +1575,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_settings=settings,
             update=update,
             context=context,
+            processing_msg=processing_msg,
         )
 
         # Update session state
@@ -1636,6 +1646,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_settings=settings,
             update=update,
             context=context,
+            processing_msg=processing_msg,
         )
 
         if new_session_id and new_session_id != state["current_session"]:
@@ -1720,6 +1731,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_settings=settings,
             update=update,
             context=context,
+            processing_msg=processing_msg,
         )
 
         if new_session_id and new_session_id != state["current_session"]:
