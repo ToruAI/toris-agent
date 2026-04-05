@@ -15,6 +15,7 @@ from io import BytesIO
 from pathlib import Path
 from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ForceReply, BotCommand
+from telegram.constants import ChatAction
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -910,6 +911,24 @@ async def call_claude(
         return f"Error calling Claude: {e}", session_id, {}
 
 
+# ============ Helpers ============
+
+async def typing_loop(update: Update, context: ContextTypes.DEFAULT_TYPE, stop_event: asyncio.Event):
+    """Send typing indicator every 4s until stop_event is set (Telegram typing expires after 5s)."""
+    while not stop_event.is_set():
+        try:
+            await context.bot.send_chat_action(
+                chat_id=update.effective_chat.id,
+                action=ChatAction.TYPING,
+            )
+        except Exception:
+            pass
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=4.0)
+        except asyncio.TimeoutError:
+            pass
+
+
 # ============ Command Handlers ============
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1578,7 +1597,9 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     state = get_user_state(user_id)
     settings = get_user_settings(user_id)
 
-    # Acknowledge receipt
+    # Acknowledge receipt + start typing indicator
+    typing_stop = asyncio.Event()
+    asyncio.ensure_future(typing_loop(update, context, typing_stop))
     processing_msg = await update.message.reply_text("Processing voice message...")
     logger.debug("Sent processing acknowledgement")
 
@@ -1637,6 +1658,8 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Error in handle_voice: {e}")
         await processing_msg.edit_text(f"Error: {e}")
+    finally:
+        typing_stop.set()
 
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1667,6 +1690,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     settings = get_user_settings(user_id)
     text = update.message.text
 
+    typing_stop = asyncio.Event()
+    asyncio.ensure_future(typing_loop(update, context, typing_stop))
     processing_msg = await update.message.reply_text("Asking Claude...")
     logger.debug("Sent processing acknowledgement")
 
@@ -1708,6 +1733,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Error in handle_text: {e}")
         await processing_msg.edit_text(f"Error: {e}")
+    finally:
+        typing_stop.set()
 
 
 # ============ Photo Handler ============
@@ -1736,6 +1763,8 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     state = get_user_state(user_id)
     settings = get_user_settings(user_id)
 
+    typing_stop = asyncio.Event()
+    asyncio.ensure_future(typing_loop(update, context, typing_stop))
     processing_msg = await update.message.reply_text("Processing photo...")
 
     try:
@@ -1792,6 +1821,8 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Error in handle_photo: {e}")
         await processing_msg.edit_text(f"Error: {e}")
+    finally:
+        typing_stop.set()
 
 
 def main():
