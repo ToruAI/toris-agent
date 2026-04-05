@@ -1693,7 +1693,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     typing_stop = asyncio.Event()
     asyncio.ensure_future(typing_loop(update, context, typing_stop))
     processing_msg = await update.message.reply_text("Asking Claude...")
-    logger.debug("Sent processing acknowledgement")
 
     # Prepend compact summary if pending from /compact
     compact_summary = state.pop("compact_summary", None)
