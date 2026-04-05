@@ -162,6 +162,8 @@ PERSONA_NAME = os.getenv("PERSONA_NAME", "Assistant")
 SYSTEM_PROMPT_FILE = os.getenv("SYSTEM_PROMPT_FILE", "")
 ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "JBFqnCBsd6RMkjVDRZzb")  # Default: George
 CLAUDE_SETTINGS_FILE = os.getenv("CLAUDE_SETTINGS_FILE", "")  # Optional settings.json for permissions
+if CLAUDE_SETTINGS_FILE and not os.path.isabs(CLAUDE_SETTINGS_FILE):
+    CLAUDE_SETTINGS_FILE = str(Path(__file__).parent / CLAUDE_SETTINGS_FILE)
 
 # Voice provider selection (resolved at startup)
 TTS_PROVIDER = resolve_provider("TTS_PROVIDER")  # "elevenlabs", "openai", or "none"
