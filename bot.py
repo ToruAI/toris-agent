@@ -828,13 +828,8 @@ async def call_claude(
     tool_count = 0
     tool_log: list[str] = []  # Running list of tool names used
 
-    # Create debug message (debug mode only) — separate persistent message for tool log
+    # debug_msg created lazily on first tool use (debug mode only)
     debug_msg = None
-    if watch_mode == "debug" and update:
-        try:
-            debug_msg = await update.message.reply_text("🔧 Running...")
-        except Exception:
-            pass
 
     # Set up cancellation tracking for this user
     user_id_for_cancel = update.effective_user.id if update else None
@@ -883,9 +878,12 @@ async def call_claude(
                                     await processing_msg.edit_text("Toris thinking...\n" + "\n".join(tool_log))
                                 except Exception:
                                     pass
-                            elif watch_mode == "debug" and debug_msg is not None:
+                            elif watch_mode == "debug" and update:
                                 try:
-                                    await debug_msg.edit_text("🔧 Tools:\n" + "\n".join(tool_log))
+                                    if debug_msg is None:
+                                        debug_msg = await update.message.reply_text("🔧 Tools:\n" + "\n".join(tool_log))
+                                    else:
+                                        await debug_msg.edit_text("🔧 Tools:\n" + "\n".join(tool_log))
                                 except Exception:
                                     pass
 
@@ -1597,7 +1595,8 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     state = get_user_state(user_id)
     settings = get_user_settings(user_id)
 
-    # Acknowledge receipt + start typing indicator
+    # Typing indicator first — signals immediately that bot is alive
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
     typing_stop = asyncio.Event()
     asyncio.ensure_future(typing_loop(update, context, typing_stop))
     processing_msg = await update.message.reply_text("Processing voice message...")
@@ -1690,6 +1689,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     settings = get_user_settings(user_id)
     text = update.message.text
 
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
     typing_stop = asyncio.Event()
     asyncio.ensure_future(typing_loop(update, context, typing_stop))
     processing_msg = await update.message.reply_text("Toris thinking...")
@@ -1762,6 +1762,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     state = get_user_state(user_id)
     settings = get_user_settings(user_id)
 
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
     typing_stop = asyncio.Event()
     asyncio.ensure_future(typing_loop(update, context, typing_stop))
     processing_msg = await update.message.reply_text("Processing photo...")
