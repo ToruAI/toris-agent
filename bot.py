@@ -880,7 +880,7 @@ async def call_claude(
 
                             if watch_mode == "live" and processing_msg is not None:
                                 try:
-                                    await processing_msg.edit_text("Asking Claude...\n" + "\n".join(tool_log))
+                                    await processing_msg.edit_text("Toris thinking...\n" + "\n".join(tool_log))
                                 except Exception:
                                     pass
                             elif watch_mode == "debug" and debug_msg is not None:
@@ -1623,7 +1623,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
             save_state()
 
         # Show what was heard
-        await processing_msg.edit_text(f"Heard: {text[:100]}{'...' if len(text) > 100 else ''}\n\nAsking Claude...")
+        await processing_msg.edit_text(f"Heard: {text[:100]}{'...' if len(text) > 100 else ''}\n\nToris thinking...")
 
         # Call Claude with user settings
         continue_last = state["current_session"] is not None
@@ -1692,7 +1692,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     typing_stop = asyncio.Event()
     asyncio.ensure_future(typing_loop(update, context, typing_stop))
-    processing_msg = await update.message.reply_text("Asking Claude...")
+    processing_msg = await update.message.reply_text("Toris thinking...")
 
     # Prepend compact summary if pending from /compact
     compact_summary = state.pop("compact_summary", None)
@@ -1789,7 +1789,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             prompt = f"<previous_session_summary>\n{compact_summary}\n</previous_session_summary>\n\n{prompt}"
             save_state()
 
-        await processing_msg.edit_text("Asking Claude...")
+        await processing_msg.edit_text("Toris thinking...")
 
         continue_last = state["current_session"] is not None
         response, new_session_id, metadata = await call_claude(
