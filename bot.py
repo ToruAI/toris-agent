@@ -495,14 +495,22 @@ def get_user_settings(user_id: int) -> dict:
             "audio_enabled": True,
             "voice_speed": VOICE_SETTINGS["speed"],
             "mode": "go_all",  # "go_all" or "approve"
-            "watch_enabled": False,  # Stream tool calls to Telegram
+            "watch_mode": "off",  # "off" | "live" | "debug"
         }
     else:
-        # Ensure new settings exist for existing users
-        if "mode" not in user_settings[user_id_str]:
-            user_settings[user_id_str]["mode"] = "go_all"
-        if "watch_enabled" not in user_settings[user_id_str]:
-            user_settings[user_id_str]["watch_enabled"] = False
+        s = user_settings[user_id_str]
+        if "mode" not in s:
+            s["mode"] = "go_all"
+        # Migrate watch_enabled / show_activity → watch_mode
+        if "watch_mode" not in s:
+            if s.pop("watch_enabled", False):
+                s["watch_mode"] = "live"
+            elif s.pop("show_activity", False):
+                s["watch_mode"] = "debug"
+            else:
+                s["watch_mode"] = "off"
+        s.pop("watch_enabled", None)
+        s.pop("show_activity", None)
     return user_settings[user_id_str]
 
 
@@ -603,9 +611,15 @@ async def text_to_speech(text: str, speed: float = None) -> BytesIO:
 
 
 async def send_long_message(update: Update, first_msg, text: str, chunk_size: int = 4000):
-    """Split long text into multiple Telegram messages."""
+    """Split long text into multiple Telegram messages.
+
+    If first_msg is None, all chunks are sent as new reply messages.
+    """
     if len(text) <= chunk_size:
-        await first_msg.edit_text(text)
+        if first_msg is None:
+            await update.message.reply_text(text)
+        else:
+            await first_msg.edit_text(text)
         return
 
     # Split into chunks
@@ -624,12 +638,20 @@ async def send_long_message(update: Update, first_msg, text: str, chunk_size: in
         chunks.append(remaining[:break_point])
         remaining = remaining[break_point:].lstrip()
 
-    # Send first chunk as edit, rest as new messages
-    await first_msg.edit_text(chunks[0] + f"\n\n[1/{len(chunks)}]")
+    # Send first chunk as edit (or new reply if first_msg is None), rest as new messages
+    if first_msg is None:
+        await update.message.reply_text(chunks[0] + f"\n\n[1/{len(chunks)}]")
+    else:
+        await first_msg.edit_text(chunks[0] + f"\n\n[1/{len(chunks)}]")
     for i, chunk in enumerate(chunks[1:], 2):
         await update.message.reply_text(chunk + f"\n\n[{i}/{len(chunks)}]")
 
     logger.debug(f"Sent {len(chunks)} message chunks")
+
+
+async def finalize_response(update: Update, processing_msg, response: str):
+    """Replace processing_msg with the final response (or send as new message if no processing_msg)."""
+    await send_long_message(update, processing_msg, response)
 
 
 def load_megg_context() -> str:
@@ -680,7 +702,7 @@ async def call_claude(
     If mode == "approve", waits for user approval before each tool.
     """
     settings = user_settings or {}
-    watch_enabled = settings.get("watch_enabled", False)
+    watch_mode = settings.get("watch_mode", "off")  # "off" | "live" | "debug"
     mode = settings.get("mode", "go_all")
 
     # Ensure sandbox exists
@@ -805,6 +827,14 @@ async def call_claude(
     tool_count = 0
     tool_log: list[str] = []  # Running list of tool names used
 
+    # Create debug message (debug mode only) — separate persistent message for tool log
+    debug_msg = None
+    if watch_mode == "debug" and update:
+        try:
+            debug_msg = await update.message.reply_text("🔧 Running...")
+        except Exception:
+            pass
+
     # Set up cancellation tracking for this user
     user_id_for_cancel = update.effective_user.id if update else None
     if user_id_for_cancel is not None:
@@ -831,11 +861,10 @@ async def call_claude(
                             result_text += block.text
                         elif isinstance(block, ToolUseBlock):
                             tool_count += 1
-                            # Build short label for this tool
+                            # Build label for this tool
                             tool_input = block.input or {}
                             if block.name == "Bash" and "command" in tool_input:
-                                cmd = tool_input["command"]
-                                label = f"Bash: {cmd[:60]}{'...' if len(cmd)>60 else ''}"
+                                label = f"Bash: {tool_input['command']}"
                             elif block.name in ("Read", "Edit", "Write") and "file_path" in tool_input:
                                 label = f"{block.name}: {tool_input['file_path']}"
                             elif block.name == "Grep" and "pattern" in tool_input:
@@ -848,21 +877,16 @@ async def call_claude(
                                 label = block.name
                             tool_log.append(f"⚙ {label}")
 
-                            # Edit processing_msg with live status (always, not just watch mode)
-                            if processing_msg is not None:
+                            if watch_mode == "live" and processing_msg is not None:
                                 try:
-                                    status_text = "Asking Claude...\n" + "\n".join(tool_log[-5:])
-                                    await processing_msg.edit_text(status_text)
+                                    await processing_msg.edit_text("Asking Claude...\n" + "\n".join(tool_log))
                                 except Exception:
-                                    pass  # Ignore edit failures (rate limits, etc.)
-
-                            # Watch mode: also send separate message (existing behavior)
-                            if watch_enabled and update:
-                                tool_msg = f"{block.name}: {tool_input.get('command', tool_input.get('file_path', tool_input.get('pattern', '')))[:80]}" if tool_input else f"Using: {block.name}"
+                                    pass
+                            elif watch_mode == "debug" and debug_msg is not None:
                                 try:
-                                    await update.message.reply_text(tool_msg)
-                                except Exception as e:
-                                    logger.debug(f"Failed to send watch message: {e}")
+                                    await debug_msg.edit_text("🔧 Tools:\n" + "\n".join(tool_log))
+                                except Exception:
+                                    pass
 
                 elif isinstance(message, ResultMessage):
                     # Extract final result and metadata
@@ -878,6 +902,7 @@ async def call_claude(
                         metadata["duration_ms"] = message.duration_ms
 
         logger.debug(f"Claude SDK responded: {len(result_text)} chars, {tool_count} tools used")
+        metadata["tool_log"] = tool_log
         return result_text, new_session_id, metadata
 
     except Exception as e:
@@ -1177,12 +1202,12 @@ async def cmd_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     speed = settings["voice_speed"]
     mode = settings.get("mode", "go_all")
     mode_display = "Go All" if mode == "go_all" else "Approve"
-    watch_status = "ON" if settings.get("watch_enabled", False) else "OFF"
+    watch_mode_val = settings.get("watch_mode", "off").upper()
 
     message = (
         f"Settings:\n\n"
         f"Mode: {mode_display}\n"
-        f"Watch: {watch_status}\n"
+        f"Watch: {watch_mode_val}\n"
         f"Audio: {audio_status}\n"
         f"Voice Speed: {speed}x"
     )
@@ -1191,7 +1216,7 @@ async def cmd_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [
             InlineKeyboardButton(f"Mode: {mode_display}", callback_data="setting_mode_toggle"),
-            InlineKeyboardButton(f"Watch: {watch_status}", callback_data="setting_watch_toggle"),
+            InlineKeyboardButton(f"Watch: {watch_mode_val}", callback_data="setting_watch_cycle"),
         ],
         [InlineKeyboardButton(f"Audio: {audio_status}", callback_data="setting_audio_toggle")],
         [
@@ -1422,10 +1447,11 @@ async def handle_settings_callback(update: Update, context: ContextTypes.DEFAULT
         save_settings()
         logger.debug(f"Mode toggled to: {settings['mode']}")
 
-    elif callback_data == "setting_watch_toggle":
-        settings["watch_enabled"] = not settings.get("watch_enabled", False)
+    elif callback_data == "setting_watch_cycle":
+        cycle = {"off": "live", "live": "debug", "debug": "off"}
+        settings["watch_mode"] = cycle.get(settings.get("watch_mode", "off"), "off")
         save_settings()
-        logger.debug(f"Watch toggled to: {settings['watch_enabled']}")
+        logger.debug(f"Watch mode cycled to: {settings['watch_mode']}")
 
     elif callback_data.startswith("setting_speed_"):
         try:
@@ -1446,14 +1472,14 @@ async def handle_settings_callback(update: Update, context: ContextTypes.DEFAULT
     speed = settings["voice_speed"]
     mode = settings.get("mode", "go_all")
     mode_display = "Go All" if mode == "go_all" else "Approve"
-    watch_status = "ON" if settings.get("watch_enabled", False) else "OFF"
+    watch_mode_val = settings.get("watch_mode", "off").upper()
 
-    message = f"Settings:\n\nMode: {mode_display}\nWatch: {watch_status}\nAudio: {audio_status}\nVoice Speed: {speed}x"
+    message = f"Settings:\n\nMode: {mode_display}\nWatch: {watch_mode_val}\nAudio: {audio_status}\nVoice Speed: {speed}x"
 
     keyboard = [
         [
             InlineKeyboardButton(f"Mode: {mode_display}", callback_data="setting_mode_toggle"),
-            InlineKeyboardButton(f"Watch: {watch_status}", callback_data="setting_watch_toggle"),
+            InlineKeyboardButton(f"Watch: {watch_mode_val}", callback_data="setting_watch_cycle"),
         ],
         [InlineKeyboardButton(f"Audio: {audio_status}", callback_data="setting_audio_toggle")],
         [
@@ -1598,7 +1624,8 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
             save_state()
 
         # Send text response (split if too long)
-        await send_long_message(update, processing_msg, response)
+        tool_log = metadata.get("tool_log", [])
+        await finalize_response(update, processing_msg, response)
 
         # Generate and send voice response if audio enabled
         if settings["audio_enabled"]:
@@ -1668,7 +1695,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             save_state()
 
         # Send text response (split if too long)
-        await send_long_message(update, processing_msg, response)
+        tool_log = metadata.get("tool_log", [])
+        await finalize_response(update, processing_msg, response)
 
         # Send voice response if audio enabled
         if settings["audio_enabled"]:
@@ -1752,7 +1780,8 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 state["sessions"].append(new_session_id)
             save_state()
 
-        await send_long_message(update, processing_msg, response)
+        tool_log = metadata.get("tool_log", [])
+        await finalize_response(update, processing_msg, response)
 
         if settings["audio_enabled"]:
             tts_text = response[:MAX_VOICE_CHARS] if len(response) > MAX_VOICE_CHARS else response
