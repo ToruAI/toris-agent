@@ -13,7 +13,7 @@ from datetime import datetime
 from io import BytesIO
 from pathlib import Path
 from dotenv import load_dotenv
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ForceReply
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ForceReply, BotCommand
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -23,6 +23,7 @@ from telegram.ext import (
     filters,
 )
 from elevenlabs.client import ElevenLabs
+from openai import OpenAI as OpenAIClient
 
 # Claude Agent SDK (official SDK for Claude Code)
 from claude_agent_sdk import (
@@ -35,12 +36,23 @@ from claude_agent_sdk.types import (
     ResultMessage,
     TextBlock,
     ToolUseBlock,
-    ToolResultBlock,
     PermissionResultAllow,
     PermissionResultDeny,
 )
 
 load_dotenv()
+
+
+def resolve_provider(explicit_env: str) -> str:
+    """Resolve voice provider: explicit > elevenlabs (if key) > openai (if key) > none."""
+    explicit = os.getenv(explicit_env, "").lower()
+    if explicit in ("openai", "elevenlabs"):
+        return explicit
+    if os.getenv("ELEVENLABS_API_KEY"):
+        return "elevenlabs"
+    if os.getenv("OPENAI_API_KEY"):
+        return "openai"
+    return "none"
 
 
 def check_claude_auth() -> tuple[bool, str]:
@@ -82,7 +94,6 @@ def validate_environment():
     """Validate required environment variables on startup."""
     required = {
         "TELEGRAM_BOT_TOKEN": "Telegram bot token from @BotFather",
-        "ELEVENLABS_API_KEY": "ElevenLabs API key from elevenlabs.io",
     }
 
     missing = []
@@ -95,6 +106,11 @@ def validate_environment():
         print("\n".join(missing))
         print("\nCopy .env.example to .env and fill in the values.")
         exit(1)
+
+    # Require at least one voice provider key
+    if not os.getenv("ELEVENLABS_API_KEY") and not os.getenv("OPENAI_API_KEY"):
+        print("WARNING: No voice provider key set (ELEVENLABS_API_KEY or OPENAI_API_KEY)")
+        print("         Voice features will be disabled until a key is configured via /setup")
 
     # Validate TELEGRAM_DEFAULT_CHAT_ID is a valid integer
     chat_id = os.getenv("TELEGRAM_DEFAULT_CHAT_ID", "0")
@@ -131,6 +147,10 @@ logger = logging.getLogger(__name__)
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
 ALLOWED_CHAT_ID = int(os.getenv("TELEGRAM_DEFAULT_CHAT_ID", "0"))
+# Admin user IDs (comma-separated) - required for /setup, /claude_token, etc.
+# If empty, falls back to chat-ID check only (backward compat)
+_admin_ids_raw = os.getenv("TELEGRAM_ADMIN_USER_IDS", "")
+ADMIN_USER_IDS = set(int(uid.strip()) for uid in _admin_ids_raw.split(",") if uid.strip()) if _admin_ids_raw.strip() else set()
 TOPIC_ID = os.getenv("TELEGRAM_TOPIC_ID")  # Empty = all topics, set = only this topic
 CLAUDE_WORKING_DIR = os.getenv("CLAUDE_WORKING_DIR", os.path.expanduser("~"))
 SANDBOX_DIR = os.getenv("CLAUDE_SANDBOX_DIR", os.path.join(os.path.expanduser("~"), "claude-voice-sandbox"))
@@ -142,9 +162,21 @@ SYSTEM_PROMPT_FILE = os.getenv("SYSTEM_PROMPT_FILE", "")
 ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "JBFqnCBsd6RMkjVDRZzb")  # Default: George
 CLAUDE_SETTINGS_FILE = os.getenv("CLAUDE_SETTINGS_FILE", "")  # Optional settings.json for permissions
 
-def debug(msg: str):
-    """Print debug message with timestamp."""
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
+# Voice provider selection (resolved at startup)
+TTS_PROVIDER = resolve_provider("TTS_PROVIDER")  # "elevenlabs", "openai", or "none"
+STT_PROVIDER = resolve_provider("STT_PROVIDER")  # "elevenlabs", "openai", or "none"
+
+# OpenAI voice config
+OPENAI_VOICE_ID = os.getenv("OPENAI_VOICE_ID", "coral")
+OPENAI_TTS_MODEL = os.getenv("OPENAI_TTS_MODEL", "gpt-4o-mini-tts")
+OPENAI_STT_MODEL = os.getenv("OPENAI_STT_MODEL", "whisper-1")
+OPENAI_VOICE_INSTRUCTIONS = os.getenv("OPENAI_VOICE_INSTRUCTIONS", "")
+
+# STT language (applies to both providers; empty = auto-detect)
+STT_LANGUAGE = os.getenv("STT_LANGUAGE", "")
+
+# OpenAI client (None if no key configured)
+openai_client = OpenAIClient(api_key=os.getenv("OPENAI_API_KEY")) if os.getenv("OPENAI_API_KEY") else None
 
 def load_system_prompt() -> str:
     """Load system prompt from file or use default."""
@@ -158,10 +190,10 @@ def load_system_prompt() -> str:
             # Replace placeholders
             content = content.replace("{sandbox_dir}", SANDBOX_DIR)
             content = content.replace("{read_dir}", CLAUDE_WORKING_DIR)
-            debug(f"Loaded system prompt from {prompt_path} ({len(content)} chars)")
+            logger.debug(f"Loaded system prompt from {prompt_path} ({len(content)} chars)")
             return content
         else:
-            debug(f"WARNING: System prompt file not found: {prompt_path}")
+            logger.debug(f"WARNING: System prompt file not found: {prompt_path}")
 
     # Fallback default prompt
     return f"""You are a voice assistant. You're talking to the user.
@@ -189,16 +221,30 @@ def should_handle_message(message_thread_id: int | None) -> bool:
     try:
         allowed_topic = int(TOPIC_ID)
     except (ValueError, TypeError):
-        debug(f"WARNING: Invalid TOPIC_ID '{TOPIC_ID}', handling all messages")
+        logger.debug(f"WARNING: Invalid TOPIC_ID '{TOPIC_ID}', handling all messages")
         return True
 
     # Check if message is in the allowed topic
     if message_thread_id is None:
         # Message not in any topic (general chat) - don't handle if we have a specific topic
-        debug(f"Message not in a topic, but we're filtering for topic {allowed_topic}")
+        logger.debug(f"Message not in a topic, but we're filtering for topic {allowed_topic}")
         return False
 
     return message_thread_id == allowed_topic
+
+
+def _is_authorized(update) -> bool:
+    """Check if the chat is authorized to use this bot."""
+    return ALLOWED_CHAT_ID == 0 or update.effective_chat.id == ALLOWED_CHAT_ID
+
+
+def _is_admin(update) -> bool:
+    """Check if user is allowed to run admin commands (token setup, etc.)."""
+    if not _is_authorized(update):
+        return False
+    if not ADMIN_USER_IDS:
+        return True  # Backward compat: no admin list = anyone in authorized chat
+    return update.effective_user.id in ADMIN_USER_IDS
 
 
 # Base system prompt (loaded once at startup)
@@ -242,6 +288,7 @@ user_settings = {}  # {user_id: {"audio_enabled": bool, "voice_speed": float, "m
 RATE_LIMIT_SECONDS = 2  # Minimum seconds between messages per user
 RATE_LIMIT_PER_MINUTE = 10  # Max messages per minute per user
 user_rate_limits = {}  # {user_id: {"last_message": timestamp, "minute_count": int, "minute_start": timestamp}}
+rate_limits = user_rate_limits  # Public alias for testing
 
 
 def check_rate_limit(user_id: int) -> tuple[bool, str]:
@@ -297,8 +344,13 @@ def load_state():
     """Load session state from file."""
     global user_sessions
     if STATE_FILE.exists():
-        with open(STATE_FILE) as f:
-            user_sessions = json.load(f)
+        try:
+            with open(STATE_FILE) as f:
+                user_sessions = json.load(f)
+            logger.debug(f"Loaded state: {len(user_sessions)} users")
+        except (json.JSONDecodeError, IOError) as e:
+            logger.warning(f"Could not load state file, starting fresh: {e}")
+            user_sessions = {}
 
 
 def save_state():
@@ -311,8 +363,13 @@ def load_settings():
     """Load user settings from file."""
     global user_settings
     if SETTINGS_FILE.exists():
-        with open(SETTINGS_FILE) as f:
-            user_settings = json.load(f)
+        try:
+            with open(SETTINGS_FILE) as f:
+                user_settings = json.load(f)
+            logger.debug(f"Loaded settings: {len(user_settings)} users")
+        except (json.JSONDecodeError, IOError) as e:
+            logger.warning(f"Could not load settings file, starting fresh: {e}")
+            user_settings = {}
 
 
 def save_settings():
@@ -346,17 +403,27 @@ def save_credentials(creds: dict):
 
 def apply_saved_credentials():
     """Apply saved credentials on startup."""
-    global elevenlabs, ELEVENLABS_API_KEY
+    global elevenlabs, ELEVENLABS_API_KEY, openai_client, TTS_PROVIDER, STT_PROVIDER
     creds = load_credentials()
 
     if creds.get("claude_token"):
         os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = creds["claude_token"]
-        debug("Applied saved Claude token")
+        logger.debug("Applied saved Claude token")
 
     if creds.get("elevenlabs_key"):
         ELEVENLABS_API_KEY = creds["elevenlabs_key"]
+        os.environ["ELEVENLABS_API_KEY"] = creds["elevenlabs_key"]
         elevenlabs = ElevenLabs(api_key=ELEVENLABS_API_KEY)
-        debug("Applied saved ElevenLabs key")
+        logger.debug("Applied saved ElevenLabs key")
+
+    if creds.get("openai_key"):
+        os.environ["OPENAI_API_KEY"] = creds["openai_key"]
+        openai_client = OpenAIClient(api_key=creds["openai_key"])
+        logger.debug("Applied saved OpenAI key")
+
+    # Re-resolve providers after credentials are loaded
+    TTS_PROVIDER = resolve_provider("TTS_PROVIDER")
+    STT_PROVIDER = resolve_provider("STT_PROVIDER")
 
 
 def get_user_state(user_id: int) -> dict:
@@ -386,47 +453,99 @@ def get_user_settings(user_id: int) -> dict:
     return user_settings[user_id_str]
 
 
-async def transcribe_voice(voice_bytes: bytes) -> str:
+async def _transcribe_elevenlabs(voice_bytes: bytes) -> str:
     """Transcribe voice using ElevenLabs Scribe."""
     try:
-        transcription = elevenlabs.speech_to_text.convert(
+        transcription = await asyncio.to_thread(
+            elevenlabs.speech_to_text.convert,
             file=BytesIO(voice_bytes),
             model_id="scribe_v1",
-            language_code="en",
+            language_code=STT_LANGUAGE or None,
         )
         return transcription.text
+    except Exception as e:
+        logger.error(f"ElevenLabs STT error: {e}")
+        raise
+
+
+async def _transcribe_openai(voice_bytes: bytes) -> str:
+    """Transcribe voice using OpenAI Whisper."""
+    try:
+        lang = STT_LANGUAGE or None
+        kwargs = {
+            "model": OPENAI_STT_MODEL,
+            "file": ("voice.ogg", BytesIO(voice_bytes), "audio/ogg"),
+        }
+        if lang:
+            kwargs["language"] = lang
+        result = await asyncio.to_thread(openai_client.audio.transcriptions.create, **kwargs)
+        return result.text
+    except Exception as e:
+        logger.error(f"OpenAI STT error: {e}")
+        raise
+
+
+async def transcribe_voice(voice_bytes: bytes) -> str:
+    """Transcribe voice — routes to active STT provider."""
+    try:
+        if STT_PROVIDER == "openai":
+            return await _transcribe_openai(voice_bytes)
+        if STT_PROVIDER == "elevenlabs":
+            return await _transcribe_elevenlabs(voice_bytes)
+        return "[Transcription error: no STT provider configured]"
     except Exception as e:
         return f"[Transcription error: {e}]"
 
 
-async def text_to_speech(text: str, speed: float = None) -> BytesIO:
-    """Convert text to speech using ElevenLabs Turbo v2.5 with expressive voice settings."""
-    try:
-        # Use provided speed or default from VOICE_SETTINGS
-        actual_speed = speed if speed is not None else VOICE_SETTINGS["speed"]
-
-        audio = elevenlabs.text_to_speech.convert(
+async def _tts_elevenlabs(text: str, speed: float = None) -> BytesIO:
+    """Convert text to speech using ElevenLabs Flash v2.5."""
+    def _sync_tts():
+        kwargs = dict(
             text=text,
             voice_id=ELEVENLABS_VOICE_ID,
-            model_id="eleven_turbo_v2_5",
+            model_id="eleven_flash_v2_5",
             output_format="mp3_44100_128",
-            voice_settings={
-                "stability": VOICE_SETTINGS["stability"],
-                "similarity_boost": VOICE_SETTINGS["similarity_boost"],
-                "style": VOICE_SETTINGS["style"],
-                "speed": actual_speed,
-                "use_speaker_boost": True,
-            },
         )
-
-        audio_buffer = BytesIO()
+        if speed is not None:
+            kwargs["voice_settings"] = {"speed": speed}
+        audio = elevenlabs.text_to_speech.convert(**kwargs)
+        buf = BytesIO()
         for chunk in audio:
             if isinstance(chunk, bytes):
-                audio_buffer.write(chunk)
-        audio_buffer.seek(0)
-        return audio_buffer
+                buf.write(chunk)
+        buf.seek(0)
+        return buf
+    return await asyncio.to_thread(_sync_tts)
+
+
+async def _tts_openai(text: str, speed: float = None) -> BytesIO:
+    """Convert text to speech using OpenAI TTS."""
+    def _sync_tts():
+        kwargs = dict(model=OPENAI_TTS_MODEL, voice=OPENAI_VOICE_ID, input=text)
+        if OPENAI_VOICE_INSTRUCTIONS:
+            kwargs["instructions"] = OPENAI_VOICE_INSTRUCTIONS
+        if speed is not None:
+            kwargs["speed"] = speed
+        response = openai_client.audio.speech.create(**kwargs)
+        buf = BytesIO()
+        for chunk in response.iter_bytes(chunk_size=4096):
+            buf.write(chunk)
+        buf.seek(0)
+        return buf
+    return await asyncio.to_thread(_sync_tts)
+
+
+async def text_to_speech(text: str, speed: float = None) -> BytesIO:
+    """Convert text to speech — routes to active TTS provider."""
+    try:
+        if TTS_PROVIDER == "openai":
+            return await _tts_openai(text, speed)
+        if TTS_PROVIDER == "elevenlabs":
+            return await _tts_elevenlabs(text, speed)
+        logger.debug("TTS skipped: no provider configured")
+        return None
     except Exception as e:
-        debug(f"TTS error: {e}")
+        logger.error(f"TTS error: {e}")
         return None
 
 
@@ -457,7 +576,7 @@ async def send_long_message(update: Update, first_msg, text: str, chunk_size: in
     for i, chunk in enumerate(chunks[1:], 2):
         await update.message.reply_text(chunk + f"\n\n[{i}/{len(chunks)}]")
 
-    debug(f"Sent {len(chunks)} message chunks")
+    logger.debug(f"Sent {len(chunks)} message chunks")
 
 
 def load_megg_context() -> str:
@@ -471,13 +590,13 @@ def load_megg_context() -> str:
             cwd=CLAUDE_WORKING_DIR
         )
         if result.returncode == 0:
-            debug(f"Loaded megg context: {len(result.stdout)} chars")
+            logger.debug(f"Loaded megg context: {len(result.stdout)} chars")
             return result.stdout
         else:
-            debug(f"Megg context failed: {result.stderr[:50]}")
+            logger.debug(f"Megg context failed: {result.stderr[:50]}")
             return ""
     except Exception as e:
-        debug(f"Megg error: {e}")
+        logger.debug(f"Megg error: {e}")
         return ""
 
 
@@ -519,14 +638,14 @@ async def call_claude(
         megg_ctx = load_megg_context()
         if megg_ctx:
             full_prompt = f"<context>\n{megg_ctx}\n</context>\n\n{prompt}"
-            debug("Prepended megg context to prompt")
+            logger.debug("Prepended megg context to prompt")
 
     # Build dynamic system prompt
     dynamic_persona = build_dynamic_prompt(user_settings)
 
-    debug(f"Calling Claude SDK: prompt={len(prompt)} chars, continue={continue_last}, session={session_id[:8] if session_id else 'new'}...")
-    debug(f"Mode: {mode}, Watch: {watch_enabled}")
-    debug(f"Working dir: {SANDBOX_DIR} (sandbox)")
+    logger.debug(f"Calling Claude SDK: prompt={len(prompt)} chars, continue={continue_last}, session={session_id[:8] if session_id else 'new'}...")
+    logger.debug(f"Mode: {mode}, Watch: {watch_enabled}")
+    logger.debug(f"Working dir: {SANDBOX_DIR} (sandbox)")
 
     # Track tool approvals for this call
     approval_event = None
@@ -536,14 +655,14 @@ async def call_claude(
         """Callback for tool approval in approve mode."""
         nonlocal approval_event, current_approval_id
 
-        debug(f">>> can_use_tool CALLED: {tool_name}")
+        logger.debug(f">>> can_use_tool CALLED: {tool_name}")
 
         if mode != "approve":
-            debug(f">>> Mode is {mode}, auto-allowing")
+            logger.debug(f">>> Mode is {mode}, auto-allowing")
             return PermissionResultAllow()
 
         if update is None:
-            debug(f"No update context for approval, allowing {tool_name}")
+            logger.debug(f"No update context for approval, allowing {tool_name}")
             return PermissionResultAllow()
 
         # Generate unique approval ID
@@ -572,33 +691,33 @@ async def call_claude(
         message_text = f"Tool Request:\n{format_tool_call(tool_name, tool_input)}"
         await update.message.reply_text(message_text, reply_markup=reply_markup, parse_mode="Markdown")
 
-        debug(f">>> Waiting for approval: {current_approval_id} ({tool_name}) - pending_approvals keys: {list(pending_approvals.keys())}")
+        logger.debug(f">>> Waiting for approval: {current_approval_id} ({tool_name}) - pending_approvals keys: {list(pending_approvals.keys())}")
 
         # Wait for user response (with timeout)
         try:
-            debug(f">>> Starting event.wait() for {current_approval_id}")
+            logger.debug(f">>> Starting event.wait() for {current_approval_id}")
             await asyncio.wait_for(approval_event.wait(), timeout=300)  # 5 min timeout
-            debug(f">>> Event.wait() completed for {current_approval_id}")
+            logger.debug(f">>> Event.wait() completed for {current_approval_id}")
         except asyncio.TimeoutError:
-            debug(f">>> Approval timeout for {current_approval_id}")
+            logger.debug(f">>> Approval timeout for {current_approval_id}")
             del pending_approvals[current_approval_id]
             return PermissionResultDeny(message="Approval timed out")
 
         # Check result
-        debug(f">>> Checking result for {current_approval_id}")
+        logger.debug(f">>> Checking result for {current_approval_id}")
         approval_data = pending_approvals.pop(current_approval_id, {})
         if approval_data.get("approved"):
-            debug(f">>> Tool approved: {tool_name}")
+            logger.debug(f">>> Tool approved: {tool_name}")
             return PermissionResultAllow()
         else:
-            debug(f">>> Tool rejected: {tool_name}")
+            logger.debug(f">>> Tool rejected: {tool_name}")
             return PermissionResultDeny(message="User rejected tool")
 
     # Build SDK options
     # In approve mode: don't pre-allow tools - let can_use_tool callback handle each one
     # In go_all mode: pre-allow all tools for no prompts
     if mode == "approve":
-        debug(f">>> APPROVE MODE: Setting up can_use_tool callback")
+        logger.debug(f">>> APPROVE MODE: Setting up can_use_tool callback")
         options = ClaudeAgentOptions(
             system_prompt=dynamic_persona,
             cwd=SANDBOX_DIR,
@@ -606,15 +725,19 @@ async def call_claude(
             permission_mode="default",
             add_dirs=[CLAUDE_WORKING_DIR],
         )
-        debug(f">>> Options: can_use_tool={options.can_use_tool is not None}, permission_mode={options.permission_mode}")
+        if CLAUDE_SETTINGS_FILE:
+            options.settings_file = CLAUDE_SETTINGS_FILE
+        logger.debug(f">>> Options: can_use_tool={options.can_use_tool is not None}, permission_mode={options.permission_mode}")
     else:
-        debug(f">>> GO_ALL MODE: Pre-allowing all tools")
+        logger.debug(f">>> GO_ALL MODE: Pre-allowing all tools")
         options = ClaudeAgentOptions(
             system_prompt=dynamic_persona,
             allowed_tools=["Read", "Grep", "Glob", "WebSearch", "WebFetch", "Task", "Bash", "Edit", "Write", "Skill"],
             cwd=SANDBOX_DIR,
             add_dirs=[CLAUDE_WORKING_DIR],
         )
+        if CLAUDE_SETTINGS_FILE:
+            options.settings_file = CLAUDE_SETTINGS_FILE
 
     # Handle session continuation
     if continue_last:
@@ -628,12 +751,12 @@ async def call_claude(
     tool_count = 0
 
     try:
-        debug(f">>> Starting ClaudeSDKClient with prompt: {len(full_prompt)} chars")
+        logger.debug(f">>> Starting ClaudeSDKClient with prompt: {len(full_prompt)} chars")
         async with ClaudeSDKClient(options=options) as client:
             await client.query(full_prompt)
             async for message in client.receive_response():
                 # Handle different message types
-                debug(f">>> SDK message type: {type(message).__name__}")
+                logger.debug(f">>> SDK message type: {type(message).__name__}")
                 if isinstance(message, AssistantMessage):
                     for block in message.content:
                         if isinstance(block, TextBlock):
@@ -664,7 +787,7 @@ async def call_claude(
                                 try:
                                     await update.message.reply_text(tool_msg)
                                 except Exception as e:
-                                    debug(f"Failed to send watch message: {e}")
+                                    logger.debug(f"Failed to send watch message: {e}")
 
                 elif isinstance(message, ResultMessage):
                     # Extract final result and metadata
@@ -679,11 +802,11 @@ async def call_claude(
                     if hasattr(message, "duration_ms"):
                         metadata["duration_ms"] = message.duration_ms
 
-        debug(f"Claude SDK responded: {len(result_text)} chars, {tool_count} tools used")
+        logger.debug(f"Claude SDK responded: {len(result_text)} chars, {tool_count} tools used")
         return result_text, new_session_id, metadata
 
     except Exception as e:
-        debug(f"Claude SDK error: {e}")
+        logger.error(f"Claude SDK error: {e}")
         return f"Error calling Claude: {e}", session_id, {}
 
 
@@ -694,9 +817,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not should_handle_message(update.message.message_thread_id):
         return
 
-    # Chat ID authentication
-    if ALLOWED_CHAT_ID != 0 and update.effective_chat.id != ALLOWED_CHAT_ID:
-        return  # Silently ignore unauthorized chats
+    if not _is_authorized(update):
+        return
 
     await update.message.reply_text(
         "Claude Voice Assistant\n\n"
@@ -717,9 +839,8 @@ async def cmd_new(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not should_handle_message(update.message.message_thread_id):
         return
 
-    # Chat ID authentication
-    if ALLOWED_CHAT_ID != 0 and update.effective_chat.id != ALLOWED_CHAT_ID:
-        return  # Silently ignore unauthorized chats
+    if not _is_authorized(update):
+        return
 
     user_id = update.effective_user.id
     state = get_user_state(user_id)
@@ -740,9 +861,8 @@ async def cmd_continue(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not should_handle_message(update.message.message_thread_id):
         return
 
-    # Chat ID authentication
-    if ALLOWED_CHAT_ID != 0 and update.effective_chat.id != ALLOWED_CHAT_ID:
-        return  # Silently ignore unauthorized chats
+    if not _is_authorized(update):
+        return
 
     user_id = update.effective_user.id
     state = get_user_state(user_id)
@@ -758,9 +878,8 @@ async def cmd_sessions(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not should_handle_message(update.message.message_thread_id):
         return
 
-    # Chat ID authentication
-    if ALLOWED_CHAT_ID != 0 and update.effective_chat.id != ALLOWED_CHAT_ID:
-        return  # Silently ignore unauthorized chats
+    if not _is_authorized(update):
+        return
 
     user_id = update.effective_user.id
     state = get_user_state(user_id)
@@ -782,9 +901,8 @@ async def cmd_switch(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not should_handle_message(update.message.message_thread_id):
         return
 
-    # Chat ID authentication
-    if ALLOWED_CHAT_ID != 0 and update.effective_chat.id != ALLOWED_CHAT_ID:
-        return  # Silently ignore unauthorized chats
+    if not _is_authorized(update):
+        return
 
     if not context.args:
         await update.message.reply_text("Usage: /switch <session_id>")
@@ -812,11 +930,10 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not should_handle_message(update.message.message_thread_id):
         return
 
-    # Chat ID authentication
-    if ALLOWED_CHAT_ID != 0 and update.effective_chat.id != ALLOWED_CHAT_ID:
-        return  # Silently ignore unauthorized chats
+    if not _is_authorized(update):
+        return
 
-    debug(f"STATUS command from user {update.effective_user.id}")
+    logger.debug(f"STATUS command from user {update.effective_user.id}")
     user_id = update.effective_user.id
     state = get_user_state(user_id)
 
@@ -834,26 +951,42 @@ async def cmd_health(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not should_handle_message(update.message.message_thread_id):
         return
 
-    # Chat ID authentication
-    if ALLOWED_CHAT_ID != 0 and update.effective_chat.id != ALLOWED_CHAT_ID:
-        return  # Silently ignore unauthorized chats
+    if not _is_authorized(update):
+        return
 
-    debug(f"HEALTH command from user {update.effective_user.id}, chat {update.effective_chat.id}, topic {update.message.message_thread_id}")
+    logger.debug(f"HEALTH command from user {update.effective_user.id}, chat {update.effective_chat.id}, topic {update.message.message_thread_id}")
 
     status = []
     status.append("=== Health Check ===\n")
 
-    # Check ElevenLabs
-    try:
-        test_audio = elevenlabs.text_to_speech.convert(
-            text="test",
-            voice_id=ELEVENLABS_VOICE_ID,
-            model_id="eleven_turbo_v2_5",
-        )
-        size = sum(len(c) for c in test_audio if isinstance(c, bytes))
-        status.append(f"ElevenLabs TTS: OK ({size} bytes, turbo_v2_5)")
-    except Exception as e:
-        status.append(f"ElevenLabs TTS: FAILED - {e}")
+    # TTS provider check
+    status.append(f"TTS Provider: {TTS_PROVIDER}")
+    if TTS_PROVIDER == "elevenlabs":
+        try:
+            test_audio = elevenlabs.text_to_speech.convert(
+                text="test",
+                voice_id=ELEVENLABS_VOICE_ID,
+                model_id="eleven_turbo_v2_5",
+            )
+            size = sum(len(c) for c in test_audio if isinstance(c, bytes))
+            status.append(f"ElevenLabs TTS: OK ({size} bytes, turbo_v2_5, voice={ELEVENLABS_VOICE_ID[:8]}...)")
+        except Exception as e:
+            status.append(f"ElevenLabs TTS: FAILED - {e}")
+    elif TTS_PROVIDER == "openai":
+        try:
+            test_audio = openai_client.audio.speech.create(
+                model=OPENAI_TTS_MODEL,
+                voice=OPENAI_VOICE_ID,
+                input="test",
+            )
+            size = len(b"".join(test_audio.iter_bytes()))
+            status.append(f"OpenAI TTS: OK ({size} bytes, {OPENAI_TTS_MODEL}, voice={OPENAI_VOICE_ID})")
+        except Exception as e:
+            status.append(f"OpenAI TTS: FAILED - {e}")
+    else:
+        status.append("TTS: No provider configured")
+
+    status.append(f"STT Provider: {STT_PROVIDER}")
 
     # Check Claude
     try:
@@ -894,9 +1027,8 @@ async def cmd_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not should_handle_message(update.message.message_thread_id):
         return
 
-    # Chat ID authentication
-    if ALLOWED_CHAT_ID != 0 and update.effective_chat.id != ALLOWED_CHAT_ID:
-        return  # Silently ignore unauthorized chats
+    if not _is_authorized(update):
+        return
 
     user_id = update.effective_user.id
     settings = get_user_settings(user_id)
@@ -943,24 +1075,35 @@ async def cmd_setup(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not should_handle_message(update.message.message_thread_id):
         return
 
-    if ALLOWED_CHAT_ID != 0 and update.effective_chat.id != ALLOWED_CHAT_ID:
+    if not _is_admin(update):
         return
 
     creds = load_credentials()
 
-    # Show current status
-    claude_status = "✓ Set" if creds.get("claude_token") else "✗ Not set"
-    elevenlabs_status = "✓ Set" if creds.get("elevenlabs_key") else "✗ Not set"
+    # Check what's configured (saved creds or env vars)
+    claude_set = bool(creds.get("claude_token") or os.getenv("ANTHROPIC_API_KEY"))
+    elevenlabs_set = bool(creds.get("elevenlabs_key") or os.getenv("ELEVENLABS_API_KEY"))
+    openai_set = bool(creds.get("openai_key") or os.getenv("OPENAI_API_KEY"))
+
+    claude_status = "✓ Set" if claude_set else "✗ Not set"
+    elevenlabs_status = "✓ Set" if elevenlabs_set else "✗ Not set (optional)"
+    openai_status = "✓ Set" if openai_set else "✗ Not set (optional)"
 
     await update.message.reply_text(
-        f"**API Credentials Status**\n\n"
-        f"Claude Token: {claude_status}\n"
-        f"ElevenLabs Key: {elevenlabs_status}\n\n"
+        f"**API Credentials**\n\n"
+        f"Claude: {claude_status}\n"
+        f"ElevenLabs: {elevenlabs_status}\n"
+        f"OpenAI: {openai_status}\n\n"
+        f"**Active providers:**\n"
+        f"TTS: `{TTS_PROVIDER}`"
+        + (f" ({OPENAI_TTS_MODEL} / {OPENAI_VOICE_ID})" if TTS_PROVIDER == "openai" else f" ({ELEVENLABS_VOICE_ID[:8]}...)" if TTS_PROVIDER == "elevenlabs" else "") + "\n"
+        f"STT: `{STT_PROVIDER}`"
+        + (f" ({OPENAI_STT_MODEL})" if STT_PROVIDER == "openai" else " (scribe_v1)" if STT_PROVIDER == "elevenlabs" else "") + "\n\n"
         f"**To configure:**\n"
-        f"`/claude_token <token>` - Set Claude token\n"
-        f"`/elevenlabs_key <key>` - Set ElevenLabs key\n\n"
-        f"_Get Claude token by running `claude setup-token` in terminal._\n"
-        f"_Token messages are deleted for security._",
+        f"`/claude_token <key>` - Set Anthropic API key\n"
+        f"`/elevenlabs_key <key>` - Set ElevenLabs key\n"
+        f"`/openai_key <key>` - Set OpenAI key\n\n"
+        f"_Messages with keys are deleted immediately for security._",
         parse_mode="Markdown"
     )
 
@@ -970,7 +1113,7 @@ async def cmd_claude_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not should_handle_message(update.message.message_thread_id):
         return
 
-    if ALLOWED_CHAT_ID != 0 and update.effective_chat.id != ALLOWED_CHAT_ID:
+    if not _is_admin(update):
         return
 
     # Delete the message immediately (contains sensitive token)
@@ -978,7 +1121,7 @@ async def cmd_claude_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await update.message.delete()
     except Exception as e:
-        debug(f"Could not delete token message: {e}")
+        logger.debug(f"Could not delete token message: {e}")
 
     # Get token from args
     if not context.args:
@@ -1021,7 +1164,7 @@ async def cmd_elevenlabs_key(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if not should_handle_message(update.message.message_thread_id):
         return
 
-    if ALLOWED_CHAT_ID != 0 and update.effective_chat.id != ALLOWED_CHAT_ID:
+    if not _is_admin(update):
         return
 
     # Delete the message immediately (contains sensitive key)
@@ -1029,7 +1172,7 @@ async def cmd_elevenlabs_key(update: Update, context: ContextTypes.DEFAULT_TYPE)
     try:
         await update.message.delete()
     except Exception as e:
-        debug(f"Could not delete key message: {e}")
+        logger.debug(f"Could not delete key message: {e}")
 
     # Get key from args
     if not context.args:
@@ -1065,10 +1208,65 @@ async def cmd_elevenlabs_key(update: Update, context: ContextTypes.DEFAULT_TYPE)
     )
 
 
+async def cmd_openai_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /openai_key command - set OpenAI API key."""
+    global openai_client, TTS_PROVIDER, STT_PROVIDER
+
+    if not should_handle_message(update.message.message_thread_id):
+        return
+
+    if not _is_admin(update):
+        return
+
+    # Delete the message immediately (contains sensitive key)
+    thread_id = update.message.message_thread_id
+    try:
+        await update.message.delete()
+    except Exception as e:
+        logger.debug(f"Could not delete key message: {e}")
+
+    if not context.args:
+        await update.effective_chat.send_message(
+            "Usage: `/openai_key <key>`\n\n"
+            "Get key from platform.openai.com/api-keys",
+            message_thread_id=thread_id,
+            parse_mode="Markdown"
+        )
+        return
+
+    key = " ".join(context.args).strip()
+
+    if not key.startswith("sk-"):
+        await update.effective_chat.send_message(
+            "❌ Invalid key format. OpenAI keys start with `sk-`",
+            message_thread_id=thread_id,
+            parse_mode="Markdown"
+        )
+        return
+
+    # Save key
+    creds = load_credentials()
+    creds["openai_key"] = key
+    save_credentials(creds)
+
+    # Apply immediately
+    os.environ["OPENAI_API_KEY"] = key
+    openai_client = OpenAIClient(api_key=key)
+    TTS_PROVIDER = resolve_provider("TTS_PROVIDER")
+    STT_PROVIDER = resolve_provider("STT_PROVIDER")
+
+    await update.effective_chat.send_message(
+        f"✓ OpenAI API key saved and applied!\n"
+        f"TTS: `{TTS_PROVIDER}` | STT: `{STT_PROVIDER}`",
+        message_thread_id=thread_id,
+        parse_mode="Markdown"
+    )
+
+
 async def handle_settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle settings button callbacks."""
     query = update.callback_query
-    debug(f"SETTINGS CALLBACK received: {query.data} from user {update.effective_user.id}")
+    logger.debug(f"SETTINGS CALLBACK received: {query.data} from user {update.effective_user.id}")
 
     user_id = update.effective_user.id
     settings = get_user_settings(user_id)
@@ -1077,18 +1275,18 @@ async def handle_settings_callback(update: Update, context: ContextTypes.DEFAULT
     if callback_data == "setting_audio_toggle":
         settings["audio_enabled"] = not settings["audio_enabled"]
         save_settings()
-        debug(f"Audio toggled to: {settings['audio_enabled']}")
+        logger.debug(f"Audio toggled to: {settings['audio_enabled']}")
 
     elif callback_data == "setting_mode_toggle":
         current_mode = settings.get("mode", "go_all")
         settings["mode"] = "approve" if current_mode == "go_all" else "go_all"
         save_settings()
-        debug(f"Mode toggled to: {settings['mode']}")
+        logger.debug(f"Mode toggled to: {settings['mode']}")
 
     elif callback_data == "setting_watch_toggle":
         settings["watch_enabled"] = not settings.get("watch_enabled", False)
         save_settings()
-        debug(f"Watch toggled to: {settings['watch_enabled']}")
+        logger.debug(f"Watch toggled to: {settings['watch_enabled']}")
 
     elif callback_data.startswith("setting_speed_"):
         try:
@@ -1102,7 +1300,7 @@ async def handle_settings_callback(update: Update, context: ContextTypes.DEFAULT
 
         settings["voice_speed"] = speed
         save_settings()
-        debug(f"Speed set to: {speed}")
+        logger.debug(f"Speed set to: {speed}")
 
     # Build updated settings menu
     audio_status = "ON" if settings["audio_enabled"] else "OFF"
@@ -1132,7 +1330,7 @@ async def handle_settings_callback(update: Update, context: ContextTypes.DEFAULT
     try:
         await query.edit_message_text(message, reply_markup=reply_markup)
     except Exception as e:
-        debug(f"Error updating settings menu: {e}")
+        logger.debug(f"Error updating settings menu: {e}")
 
     await query.answer()
 
@@ -1142,14 +1340,14 @@ async def handle_approval_callback(update: Update, context: ContextTypes.DEFAULT
     query = update.callback_query
     callback_data = query.data
 
-    debug(f">>> APPROVAL CALLBACK received: {callback_data}")
+    logger.debug(f">>> APPROVAL CALLBACK received: {callback_data}")
 
     # Answer the callback immediately to prevent Telegram timeout
     await query.answer()
 
     if callback_data.startswith("approve_"):
         approval_id = callback_data.replace("approve_", "")
-        debug(f">>> Looking for approval_id: {approval_id} in {list(pending_approvals.keys())}")
+        logger.debug(f">>> Looking for approval_id: {approval_id} in {list(pending_approvals.keys())}")
         if approval_id in pending_approvals:
             # Verify that the user clicking is the one who requested
             if update.effective_user.id != pending_approvals[approval_id].get("user_id"):
@@ -1158,17 +1356,17 @@ async def handle_approval_callback(update: Update, context: ContextTypes.DEFAULT
 
             tool_name = pending_approvals[approval_id]["tool_name"]
             pending_approvals[approval_id]["approved"] = True
-            debug(f">>> Setting event for {approval_id}")
+            logger.debug(f">>> Setting event for {approval_id}")
             pending_approvals[approval_id]["event"].set()
-            debug(f">>> Event set, updating message")
+            logger.debug(f">>> Event set, updating message")
             await query.edit_message_text(f"✓ Approved: {tool_name}")
         else:
-            debug(f">>> Approval {approval_id} not found (expired)")
+            logger.debug(f">>> Approval {approval_id} not found (expired)")
             await query.edit_message_text("Approval expired")
 
     elif callback_data.startswith("reject_"):
         approval_id = callback_data.replace("reject_", "")
-        debug(f">>> Looking for approval_id: {approval_id} in {list(pending_approvals.keys())}")
+        logger.debug(f">>> Looking for approval_id: {approval_id} in {list(pending_approvals.keys())}")
         if approval_id in pending_approvals:
             # Verify that the user clicking is the one who requested
             if update.effective_user.id != pending_approvals[approval_id].get("user_id"):
@@ -1177,12 +1375,12 @@ async def handle_approval_callback(update: Update, context: ContextTypes.DEFAULT
 
             tool_name = pending_approvals[approval_id]["tool_name"]
             pending_approvals[approval_id]["approved"] = False
-            debug(f">>> Setting event for {approval_id} (reject)")
+            logger.debug(f">>> Setting event for {approval_id} (reject)")
             pending_approvals[approval_id]["event"].set()
-            debug(f">>> Event set, updating message")
+            logger.debug(f">>> Event set, updating message")
             await query.edit_message_text(f"✗ Rejected: {tool_name}")
         else:
-            debug(f">>> Approval {approval_id} not found (expired)")
+            logger.debug(f">>> Approval {approval_id} not found (expired)")
             await query.edit_message_text("Approval expired")
 
 
@@ -1194,16 +1392,15 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.is_bot is True:
         return
 
-    debug(f"VOICE received from user {update.effective_user.id}, chat {update.effective_chat.id}, topic {update.message.message_thread_id}")
+    logger.debug(f"VOICE received from user {update.effective_user.id}, chat {update.effective_chat.id}, topic {update.message.message_thread_id}")
 
     # Topic filtering - ignore messages not in our topic
     if not should_handle_message(update.message.message_thread_id):
-        debug(f"Ignoring voice message - not in our topic (configured: {TOPIC_ID})")
+        logger.debug(f"Ignoring voice message - not in our topic (configured: {TOPIC_ID})")
         return
 
-    # Chat ID authentication
-    if ALLOWED_CHAT_ID != 0 and update.effective_chat.id != ALLOWED_CHAT_ID:
-        return  # Silently ignore unauthorized chats
+    if not _is_authorized(update):
+        return
 
     user_id = update.effective_user.id
 
@@ -1218,7 +1415,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Acknowledge receipt
     processing_msg = await update.message.reply_text("Processing voice message...")
-    debug("Sent processing acknowledgement")
+    logger.debug("Sent processing acknowledgement")
 
     try:
         # Download voice
@@ -1259,12 +1456,13 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # Generate and send voice response if audio enabled
         if settings["audio_enabled"]:
-            audio = await text_to_speech(response, speed=settings["voice_speed"])
+            tts_text = response[:MAX_VOICE_CHARS] if len(response) > MAX_VOICE_CHARS else response
+            audio = await text_to_speech(tts_text, speed=settings["voice_speed"])
             if audio:
                 await update.message.reply_voice(voice=audio)
 
     except Exception as e:
-        debug(f"Error in handle_voice: {e}")
+        logger.error(f"Error in handle_voice: {e}")
         await processing_msg.edit_text(f"Error: {e}")
 
 
@@ -1274,16 +1472,15 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.is_bot is True:
         return
 
-    debug(f"TEXT received: '{update.message.text[:50]}' from user {update.effective_user.id}, chat {update.effective_chat.id}, topic {update.message.message_thread_id}")
+    logger.debug(f"TEXT received: '{update.message.text[:50]}' from user {update.effective_user.id}, chat {update.effective_chat.id}, topic {update.message.message_thread_id}")
 
     # Topic filtering - ignore messages not in our topic
     if not should_handle_message(update.message.message_thread_id):
-        debug(f"Ignoring text message - not in our topic (configured: {TOPIC_ID})")
+        logger.debug(f"Ignoring text message - not in our topic (configured: {TOPIC_ID})")
         return
 
-    # Chat ID authentication
-    if ALLOWED_CHAT_ID != 0 and update.effective_chat.id != ALLOWED_CHAT_ID:
-        return  # Silently ignore unauthorized chats
+    if not _is_authorized(update):
+        return
 
     user_id = update.effective_user.id
 
@@ -1298,7 +1495,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
 
     processing_msg = await update.message.reply_text("Asking Claude...")
-    debug("Sent processing acknowledgement")
+    logger.debug("Sent processing acknowledgement")
 
     try:
         continue_last = state["current_session"] is not None
@@ -1322,12 +1519,13 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # Send voice response if audio enabled
         if settings["audio_enabled"]:
-            audio = await text_to_speech(response, speed=settings["voice_speed"])
+            tts_text = response[:MAX_VOICE_CHARS] if len(response) > MAX_VOICE_CHARS else response
+            audio = await text_to_speech(tts_text, speed=settings["voice_speed"])
             if audio:
                 await update.message.reply_voice(voice=audio)
 
     except Exception as e:
-        debug(f"Error in handle_text: {e}")
+        logger.error(f"Error in handle_text: {e}")
         await processing_msg.edit_text(f"Error: {e}")
 
 
@@ -1357,6 +1555,7 @@ def main():
     app.add_handler(CommandHandler("setup", cmd_setup))
     app.add_handler(CommandHandler("claude_token", cmd_claude_token))
     app.add_handler(CommandHandler("elevenlabs_key", cmd_elevenlabs_key))
+    app.add_handler(CommandHandler("openai_key", cmd_openai_key))
 
     # Callback handlers for inline keyboards
     app.add_handler(CallbackQueryHandler(handle_settings_callback, pattern="^setting_"))
@@ -1369,15 +1568,30 @@ def main():
     # Ensure sandbox exists at startup
     Path(SANDBOX_DIR).mkdir(parents=True, exist_ok=True)
 
-    debug("Bot starting...")
-    debug(f"Persona: {PERSONA_NAME}")
-    debug(f"Voice ID: {ELEVENLABS_VOICE_ID}")
-    debug(f"TTS: eleven_turbo_v2_5 with expressive settings")
-    debug(f"Sandbox: {SANDBOX_DIR}")
-    debug(f"Read access: {CLAUDE_WORKING_DIR}")
-    debug(f"Chat ID: {ALLOWED_CHAT_ID}")
-    debug(f"Topic ID: {TOPIC_ID or 'ALL (no filter)'}")
-    debug(f"System prompt: {SYSTEM_PROMPT_FILE or 'default'}")
+    # Register commands in Telegram menu (the "/" autocomplete list)
+    async def post_init(application):
+        await application.bot.set_my_commands([
+            BotCommand("new",      "Start a new session"),
+            BotCommand("continue", "Continue last session"),
+            BotCommand("sessions", "List recent sessions"),
+            BotCommand("switch",   "Switch to a session by ID"),
+            BotCommand("status",   "Current session info"),
+            BotCommand("settings", "Voice, mode & speed settings"),
+            BotCommand("health",   "Check bot & API status"),
+            BotCommand("setup",    "Configure API tokens"),
+            BotCommand("start",    "Show help"),
+        ])
+    app.post_init = post_init
+
+    logger.debug("Bot starting...")
+    logger.debug(f"Persona: {PERSONA_NAME}")
+    logger.debug(f"TTS: {TTS_PROVIDER}" + (f" ({OPENAI_TTS_MODEL} / {OPENAI_VOICE_ID})" if TTS_PROVIDER == "openai" else f" (eleven_turbo_v2_5 / {ELEVENLABS_VOICE_ID})" if TTS_PROVIDER == "elevenlabs" else " (none)"))
+    logger.debug(f"STT: {STT_PROVIDER}" + (f" ({OPENAI_STT_MODEL})" if STT_PROVIDER == "openai" else " (scribe_v1)" if STT_PROVIDER == "elevenlabs" else " (none)"))
+    logger.debug(f"Sandbox: {SANDBOX_DIR}")
+    logger.debug(f"Read access: {CLAUDE_WORKING_DIR}")
+    logger.debug(f"Chat ID: {ALLOWED_CHAT_ID}")
+    logger.debug(f"Topic ID: {TOPIC_ID or 'ALL (no filter)'}")
+    logger.debug(f"System prompt: {SYSTEM_PROMPT_FILE or 'default'}")
     print(f"{PERSONA_NAME} is ready. Waiting for messages...")
     app.run_polling(
         drop_pending_updates=True,
