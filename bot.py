@@ -732,7 +732,8 @@ async def call_claude(
         logger.debug(f">>> GO_ALL MODE: Pre-allowing all tools")
         options = ClaudeAgentOptions(
             system_prompt=dynamic_persona,
-            allowed_tools=["Read", "Grep", "Glob", "WebSearch", "WebFetch", "Task", "Bash", "Edit", "Write", "Skill"],
+            allowed_tools=["Read", "Grep", "Glob", "WebSearch", "WebFetch", "Task", "Bash", "Edit", "Write", "Skill",
+                           "mcp__megg__state", "mcp__megg__context", "mcp__megg__learn", "mcp__megg__maintain", "mcp__megg__init"],
             cwd=SANDBOX_DIR,
             add_dirs=[CLAUDE_WORKING_DIR],
         )

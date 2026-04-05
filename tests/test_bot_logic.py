@@ -356,3 +356,42 @@ class TestAdminUserIds:
         assert bot._is_admin(FakeUpdate()) is False
         bot.ALLOWED_CHAT_ID = orig_chat
         bot.ADMIN_USER_IDS = orig_admin
+
+
+class TestSettingsJson:
+    """Validate settings.json if it exists."""
+
+    SETTINGS_PATH = Path(__file__).parent.parent / "settings.json"
+
+    def test_settings_example_valid_json(self):
+        """settings.example.json should always be valid JSON."""
+        example_path = Path(__file__).parent.parent / "settings.example.json"
+        content = example_path.read_text()
+        data = json.loads(content)
+        assert "permissions" in data or "mcpServers" in data
+
+    def test_settings_example_has_megg(self):
+        """settings.example.json should include MEGG MCP config."""
+        example_path = Path(__file__).parent.parent / "settings.example.json"
+        data = json.loads(example_path.read_text())
+        assert "mcpServers" in data
+        assert "megg" in data["mcpServers"]
+        megg = data["mcpServers"]["megg"]
+        assert "command" in megg
+        assert megg["command"] == "npx"
+
+    def test_settings_json_valid_if_exists(self):
+        """settings.json should be valid JSON if it exists."""
+        if not self.SETTINGS_PATH.exists():
+            pytest.skip("settings.json not present (expected in local dev only)")
+        content = self.SETTINGS_PATH.read_text()
+        data = json.loads(content)
+        assert isinstance(data, dict)
+
+    def test_settings_json_has_megg_if_exists(self):
+        """settings.json should contain MEGG MCP if it exists."""
+        if not self.SETTINGS_PATH.exists():
+            pytest.skip("settings.json not present (expected in local dev only)")
+        data = json.loads(self.SETTINGS_PATH.read_text())
+        assert "mcpServers" in data, "settings.json missing mcpServers"
+        assert "megg" in data["mcpServers"], "settings.json missing megg MCP config"

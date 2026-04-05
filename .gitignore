@@ -18,6 +18,7 @@ bot.log
 # State files (user-specific, not for repo)
 sessions_state.json
 user_settings.json
+settings.json
 
 # Test artifacts
 .coverage
