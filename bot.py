@@ -1186,6 +1186,23 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+def parse_session_name(args: list) -> "str | None":
+    """Return joined args as a session name, or None if empty."""
+    return " ".join(args).strip() or None
+
+
+def format_sessions_list(sessions: list) -> str:
+    """Format a list of session dicts for display in Telegram."""
+    if not sessions:
+        return "No sessions yet."
+    lines = []
+    for i, s in enumerate(sessions, 1):
+        sid = s.get("id", "")[:8]
+        name = s.get("name") or "(unnamed)"
+        lines.append(f"{i}. `{sid}` — {name}")
+    return "\n".join(lines)
+
+
 async def cmd_new(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /new command - start new session."""
     if not should_handle_message(update.message.message_thread_id):
@@ -1197,13 +1214,14 @@ async def cmd_new(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     state = get_user_state(user_id)
 
-    session_name = " ".join(context.args) if context.args else None
+    session_name = parse_session_name(context.args or [])
     state["current_session"] = None  # Will be set on first message
+    state["pending_session_name"] = session_name
 
     if session_name:
-        await update.message.reply_text(f"New session started: {session_name}")
+        await update.message.reply_text(f"✅ Starting new session: *{session_name}*", parse_mode="Markdown")
     else:
-        await update.message.reply_text("New session started. Send a voice message to begin.")
+        await update.message.reply_text("✅ Starting new session.")
 
     save_state()
 
@@ -1297,16 +1315,17 @@ async def cmd_sessions(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     state = get_user_state(user_id)
 
-    if not state["sessions"]:
-        await update.message.reply_text("No sessions yet.")
-        return
-
-    msg = "Sessions:\n"
-    for i, sess in enumerate(state["sessions"][-10:], 1):  # Last 10
-        current = " (current)" if sess == state["current_session"] else ""
-        msg += f"{i}. {sess[:8]}...{current}\n"
-
-    await update.message.reply_text(msg)
+    names = state.get("session_names", {})
+    sessions_data = [
+        {"id": sid, "name": names.get(sid)}
+        for sid in state.get("sessions", [])[-10:]
+    ]
+    text = format_sessions_list(sessions_data)
+    current_id = state.get("current_session")
+    if current_id:
+        current_short = current_id[:8]
+        text += f"\n\nCurrent: `{current_short}`"
+    await update.message.reply_text(f"Sessions:\n{text}", parse_mode="Markdown")
 
 
 async def cmd_switch(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2011,6 +2030,8 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         async with get_user_lock(str(user_id)):
             if new_session_id and new_session_id != state["current_session"]:
                 state["current_session"] = new_session_id
+                name = state.pop("pending_session_name", None)
+                state.setdefault("session_names", {})[new_session_id] = name
                 if new_session_id not in state["sessions"]:
                     state["sessions"].append(new_session_id)
                 save_state()
@@ -2094,6 +2115,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         async with get_user_lock(str(user_id)):
             if new_session_id and new_session_id != state["current_session"]:
                 state["current_session"] = new_session_id
+                name = state.pop("pending_session_name", None)
+                state.setdefault("session_names", {})[new_session_id] = name
                 if new_session_id not in state["sessions"]:
                     state["sessions"].append(new_session_id)
                 save_state()
@@ -2193,6 +2216,8 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         async with get_user_lock(str(user_id)):
             if new_session_id and new_session_id != state["current_session"]:
                 state["current_session"] = new_session_id
+                name = state.pop("pending_session_name", None)
+                state.setdefault("session_names", {})[new_session_id] = name
                 if new_session_id not in state["sessions"]:
                     state["sessions"].append(new_session_id)
                 save_state()

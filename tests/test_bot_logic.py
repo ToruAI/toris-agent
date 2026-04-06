@@ -879,3 +879,38 @@ class TestWorkingIndicator:
             indicator.stop()
             # no exception raised
         asyncio.run(run())
+
+
+class TestSessionNaming:
+    def test_parse_session_name_empty_args(self):
+        assert bot.parse_session_name([]) is None
+
+    def test_parse_session_name_single_word(self):
+        assert bot.parse_session_name(["analysis"]) == "analysis"
+
+    def test_parse_session_name_multiple_words(self):
+        assert bot.parse_session_name(["my", "project"]) == "my project"
+
+    def test_format_sessions_list_empty(self):
+        assert bot.format_sessions_list([]) == "No sessions yet."
+
+    def test_format_sessions_list_shows_name(self):
+        sessions = [{"id": "abc123de", "name": "project analysis"}]
+        text = bot.format_sessions_list(sessions)
+        assert "project analysis" in text
+        assert "abc123d" in text
+
+    def test_format_sessions_list_unnamed_shows_placeholder(self):
+        sessions = [{"id": "def456gh", "name": None}]
+        text = bot.format_sessions_list(sessions)
+        assert "(unnamed)" in text
+        assert "def456g" in text
+
+    def test_format_sessions_list_multiple(self):
+        sessions = [
+            {"id": "abc123de", "name": "project analysis"},
+            {"id": "def456gh", "name": None},
+        ]
+        text = bot.format_sessions_list(sessions)
+        assert "project analysis" in text
+        assert "(unnamed)" in text
