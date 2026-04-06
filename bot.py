@@ -1417,6 +1417,25 @@ async def cmd_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(message, reply_markup=reply_markup)
 
 
+async def cmd_automations(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /automations command — show scheduled tasks list."""
+    if not should_handle_message(update.message.message_thread_id):
+        return
+    if not _is_authorized(update):
+        return
+
+    loading_msg = await update.message.reply_text("⏳ Ładuję automacje...")
+
+    triggers = await run_remote_trigger_list()
+    text, markup = build_automations_list(triggers)
+
+    try:
+        await loading_msg.edit_text(text, reply_markup=markup)
+    except Exception as e:
+        logger.warning(f"cmd_automations edit error: {e}")
+        await update.message.reply_text(text, reply_markup=markup)
+
+
 # ============ Token Configuration Commands ============
 
 async def cmd_setup(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2018,6 +2037,7 @@ def main():
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(CommandHandler("health", cmd_health))
     app.add_handler(CommandHandler("settings", cmd_settings))
+    app.add_handler(CommandHandler("automations", cmd_automations))
     app.add_handler(CommandHandler("setup", cmd_setup))
     app.add_handler(CommandHandler("claude_token", cmd_claude_token))
     app.add_handler(CommandHandler("elevenlabs_key", cmd_elevenlabs_key))
@@ -2045,7 +2065,8 @@ def main():
             BotCommand("sessions", "List recent sessions"),
             BotCommand("switch",   "Switch to a session by ID"),
             BotCommand("status",   "Current session info"),
-            BotCommand("settings", "Voice, mode & speed settings"),
+            BotCommand("settings",    "Voice, mode & speed settings"),
+            BotCommand("automations", "Manage scheduled automations"),
             BotCommand("health",   "Check bot & API status"),
             BotCommand("setup",    "Configure API tokens"),
             BotCommand("start",    "Show help"),
