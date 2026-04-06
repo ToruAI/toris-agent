@@ -820,3 +820,62 @@ class TestClaudeTimeout:
         importlib.reload(config)
         importlib.reload(bot)
         assert bot.CLAUDE_TIMEOUT == 120
+
+
+class TestWorkingIndicator:
+    def test_start_creates_task(self):
+        async def run():
+            calls = []
+            async def edit_fn(msg):
+                calls.append(msg)
+            indicator = bot.WorkingIndicator(edit_fn=edit_fn, interval=0.05)
+            indicator.start()
+            assert indicator._task is not None
+            indicator.stop()
+        asyncio.run(run())
+
+    def test_stop_cancels_task(self):
+        async def run():
+            async def edit_fn(msg):
+                pass
+            indicator = bot.WorkingIndicator(edit_fn=edit_fn, interval=10.0)
+            indicator.start()
+            indicator.stop()
+            assert indicator._task is None
+        asyncio.run(run())
+
+    def test_edit_fn_called_after_interval(self):
+        async def run():
+            calls = []
+            async def edit_fn(msg):
+                calls.append(msg)
+            indicator = bot.WorkingIndicator(edit_fn=edit_fn, interval=0.05)
+            indicator.start()
+            await asyncio.sleep(0.12)
+            indicator.stop()
+            assert len(calls) >= 2
+        asyncio.run(run())
+
+    def test_messages_cycle_through_list(self):
+        async def run():
+            calls = []
+            async def edit_fn(msg):
+                calls.append(msg)
+            indicator = bot.WorkingIndicator(edit_fn=edit_fn, interval=0.02)
+            indicator.start()
+            await asyncio.sleep(0.12)
+            indicator.stop()
+            assert len(calls) >= 2
+            assert all(msg in bot.WorkingIndicator.MESSAGES for msg in calls)
+        asyncio.run(run())
+
+    def test_edit_fn_exception_does_not_propagate(self):
+        async def run():
+            async def edit_fn(msg):
+                raise RuntimeError("network error")
+            indicator = bot.WorkingIndicator(edit_fn=edit_fn, interval=0.05)
+            indicator.start()
+            await asyncio.sleep(0.12)
+            indicator.stop()
+            # no exception raised
+        asyncio.run(run())

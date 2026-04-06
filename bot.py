@@ -946,6 +946,54 @@ async def typing_loop(update: Update, context: ContextTypes.DEFAULT_TYPE, stop_e
             pass
 
 
+# ============ Working Indicator ============
+
+class WorkingIndicator:
+    """Sends periodic 'still working' status updates during long Claude calls.
+
+    Usage:
+        indicator = WorkingIndicator(edit_fn=processing_msg.edit_text, interval=5.0)
+        indicator.start()
+        try:
+            result = await long_operation()
+        finally:
+            indicator.stop()
+    """
+
+    MESSAGES = [
+        "⏳ Toris is thinking...",
+        "⏳ Still working...",
+        "⏳ Running tools...",
+        "⏳ Almost there...",
+    ]
+
+    def __init__(self, edit_fn, interval: float = 5.0):
+        self._edit_fn = edit_fn
+        self._interval = interval
+        self._task: asyncio.Task | None = None
+        self._count = 0
+
+    async def _loop(self):
+        while True:
+            await asyncio.sleep(self._interval)
+            msg = self.MESSAGES[self._count % len(self.MESSAGES)]
+            self._count += 1
+            try:
+                await self._edit_fn(msg)
+            except Exception:
+                pass  # Status update failure must never crash the main call
+
+    def start(self):
+        """Start the background status update task."""
+        self._task = asyncio.create_task(self._loop())
+
+    def stop(self):
+        """Stop and cancel the background task."""
+        if self._task:
+            self._task.cancel()
+            self._task = None
+
+
 # ============ Automations Helpers ============
 
 def cron_to_human(expr: str) -> str:
@@ -1942,17 +1990,22 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Show what was heard
         await processing_msg.edit_text(f"Heard: {text[:100]}{'...' if len(text) > 100 else ''}\n\nToris thinking...")
 
-        # Call Claude with user settings
+        # Call Claude with user settings — WorkingIndicator gives periodic updates
         continue_last = state["current_session"] is not None
-        response, new_session_id, metadata = await call_claude(
-            text,
-            session_id=state["current_session"],
-            continue_last=continue_last,
-            user_settings=settings,
-            update=update,
-            context=context,
-            processing_msg=processing_msg,
-        )
+        indicator = WorkingIndicator(edit_fn=processing_msg.edit_text, interval=5.0)
+        indicator.start()
+        try:
+            response, new_session_id, metadata = await call_claude(
+                text,
+                session_id=state["current_session"],
+                continue_last=continue_last,
+                user_settings=settings,
+                update=update,
+                context=context,
+                processing_msg=processing_msg,
+            )
+        finally:
+            indicator.stop()
 
         # Update session state
         async with get_user_lock(str(user_id)):
@@ -2023,15 +2076,20 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         continue_last = state["current_session"] is not None
-        response, new_session_id, metadata = await call_claude(
-            text,
-            session_id=state["current_session"],
-            continue_last=continue_last,
-            user_settings=settings,
-            update=update,
-            context=context,
-            processing_msg=processing_msg,
-        )
+        indicator = WorkingIndicator(edit_fn=processing_msg.edit_text, interval=5.0)
+        indicator.start()
+        try:
+            response, new_session_id, metadata = await call_claude(
+                text,
+                session_id=state["current_session"],
+                continue_last=continue_last,
+                user_settings=settings,
+                update=update,
+                context=context,
+                processing_msg=processing_msg,
+            )
+        finally:
+            indicator.stop()
 
         async with get_user_lock(str(user_id)):
             if new_session_id and new_session_id != state["current_session"]:
@@ -2117,15 +2175,20 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await processing_msg.edit_text("Toris thinking...")
 
         continue_last = state["current_session"] is not None
-        response, new_session_id, metadata = await call_claude(
-            prompt,
-            session_id=state["current_session"],
-            continue_last=continue_last,
-            user_settings=settings,
-            update=update,
-            context=context,
-            processing_msg=processing_msg,
-        )
+        indicator = WorkingIndicator(edit_fn=processing_msg.edit_text, interval=5.0)
+        indicator.start()
+        try:
+            response, new_session_id, metadata = await call_claude(
+                prompt,
+                session_id=state["current_session"],
+                continue_last=continue_last,
+                user_settings=settings,
+                update=update,
+                context=context,
+                processing_msg=processing_msg,
+            )
+        finally:
+            indicator.stop()
 
         async with get_user_lock(str(user_id)):
             if new_session_id and new_session_id != state["current_session"]:
