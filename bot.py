@@ -1036,7 +1036,7 @@ def build_automations_list(triggers: list[dict]) -> tuple[str, InlineKeyboardMar
         toggle_cb = f"auto_toggle_off_{tid}" if enabled else f"auto_toggle_on_{tid}"
         row = [
             InlineKeyboardButton(f"{status} {name}", callback_data=f"auto_card_{tid}"),
-            InlineKeyboardButton("▶", callback_data=f"auto_run_{tid}"),
+            InlineKeyboardButton("▶ Run", callback_data=f"auto_run_{tid}"),
             InlineKeyboardButton(toggle_label, callback_data=toggle_cb),
         ]
         keyboard.append(row)
