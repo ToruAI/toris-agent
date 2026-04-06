@@ -734,3 +734,14 @@ class TestTranscriptionValidation:
 
     def test_text_with_leading_whitespace_valid(self):
         assert bot.is_valid_transcription("  Hello there  ") is True
+
+
+class TestTTSFallback:
+    def test_format_tts_fallback_contains_response(self):
+        msg = bot.format_tts_fallback("Here is your answer.")
+        assert "Here is your answer." in msg
+        assert "🔇" in msg
+
+    def test_format_tts_fallback_mentions_voice(self):
+        msg = bot.format_tts_fallback("Test.")
+        assert "Voice" in msg or "voice" in msg

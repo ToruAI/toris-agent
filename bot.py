@@ -617,6 +617,11 @@ async def text_to_speech(text: str, speed: float = None) -> BytesIO:
         return None
 
 
+def format_tts_fallback(response_text: str) -> str:
+    """Format response as text when TTS fails silently — adds a notice."""
+    return f"🔇 Voice generation failed — here's the text:\n\n{response_text}"
+
+
 async def send_long_message(update: Update, first_msg, text: str, chunk_size: int = 4000):
     """Split long text into multiple Telegram messages.
 
@@ -1957,6 +1962,8 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
             audio = await text_to_speech(tts_text, speed=settings["voice_speed"])
             if audio:
                 await update.message.reply_voice(voice=audio)
+            else:
+                await update.message.reply_text(format_tts_fallback(tts_text))
 
     except Exception as e:
         logger.error(f"Error in handle_voice: {e}")
@@ -2032,6 +2039,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             audio = await text_to_speech(tts_text, speed=settings["voice_speed"])
             if audio:
                 await update.message.reply_voice(voice=audio)
+            else:
+                await update.message.reply_text(format_tts_fallback(tts_text))
 
     except Exception as e:
         logger.error(f"Error in handle_text: {e}")
@@ -2121,6 +2130,8 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             audio = await text_to_speech(tts_text, speed=settings["voice_speed"])
             if audio:
                 await update.message.reply_voice(voice=audio)
+            else:
+                await update.message.reply_text(format_tts_fallback(tts_text))
 
     except Exception as e:
         logger.error(f"Error in handle_photo: {e}")
