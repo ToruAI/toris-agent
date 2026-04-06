@@ -136,6 +136,13 @@ logger = logging.getLogger(__name__)
 
 # Config — loaded from config.py (single source of truth for all env vars)
 import config as _cfg
+import voice_service
+from voice_service import (
+    transcribe_voice,
+    is_valid_transcription,
+    text_to_speech,
+    format_tts_fallback,
+)
 TELEGRAM_BOT_TOKEN = _cfg.TELEGRAM_BOT_TOKEN
 ELEVENLABS_API_KEY = _cfg.ELEVENLABS_API_KEY
 ALLOWED_CHAT_ID = _cfg.ALLOWED_CHAT_ID
@@ -527,15 +534,6 @@ def get_user_settings(user_id: int) -> dict:
         s.pop("watch_enabled", None)
         s.pop("show_activity", None)
     return user_settings[user_id_str]
-
-
-import voice_service
-from voice_service import (
-    transcribe_voice,
-    is_valid_transcription,
-    text_to_speech,
-    format_tts_fallback,
-)
 
 
 def error_message(context: str, exc: Exception) -> str:

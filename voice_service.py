@@ -14,7 +14,7 @@ from openai import OpenAI as OpenAIClient
 logger = logging.getLogger(__name__)
 
 # Mutable client references — updated by reconfigure() when keys change
-_elevenlabs = ElevenLabs(api_key=_cfg.ELEVENLABS_API_KEY)
+_elevenlabs = ElevenLabs(api_key=_cfg.ELEVENLABS_API_KEY) if _cfg.ELEVENLABS_API_KEY else None
 _openai_client = OpenAIClient(api_key=_cfg.OPENAI_API_KEY) if _cfg.OPENAI_API_KEY else None
 
 # Provider selection — mirrors config, updated by reconfigure()
@@ -30,9 +30,9 @@ def reconfigure(
 ):
     """Hot-swap clients after API keys change (called by apply_saved_credentials and /elevenlabs_key, /openai_key)."""
     global _elevenlabs, _openai_client, _tts_provider, _stt_provider
-    if elevenlabs_key:
+    if elevenlabs_key is not None:
         _elevenlabs = ElevenLabs(api_key=elevenlabs_key)
-    if openai_key:
+    if openai_key is not None:
         _openai_client = OpenAIClient(api_key=openai_key)
     if tts_provider is not None:
         _tts_provider = tts_provider
