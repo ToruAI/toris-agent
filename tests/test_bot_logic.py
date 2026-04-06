@@ -711,3 +711,26 @@ class TestMcpStatus:
 
         result = bot.get_mcp_status(str(settings_file))
         assert any("misconfigured" in line for line in result)
+
+
+class TestTranscriptionValidation:
+    def test_empty_string_invalid(self):
+        assert bot.is_valid_transcription("") is False
+
+    def test_whitespace_only_invalid(self):
+        assert bot.is_valid_transcription("   ") is False
+
+    def test_transcription_error_string_invalid(self):
+        assert bot.is_valid_transcription("[Transcription error: timeout]") is False
+
+    def test_transcription_error_any_variant_invalid(self):
+        assert bot.is_valid_transcription("[Transcription error: network failure]") is False
+
+    def test_normal_text_valid(self):
+        assert bot.is_valid_transcription("Hello, what's the weather?") is True
+
+    def test_short_text_valid(self):
+        assert bot.is_valid_transcription("ok") is True
+
+    def test_text_with_leading_whitespace_valid(self):
+        assert bot.is_valid_transcription("  Hello there  ") is True

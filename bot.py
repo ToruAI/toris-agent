@@ -559,6 +559,12 @@ async def transcribe_voice(voice_bytes: bytes) -> str:
         return f"[Transcription error: {e}]"
 
 
+def is_valid_transcription(text: str) -> bool:
+    """Return True if transcription is usable — not empty and not an error string."""
+    stripped = text.strip()
+    return bool(stripped) and not stripped.startswith("[Transcription error")
+
+
 async def _tts_elevenlabs(text: str, speed: float = None) -> BytesIO:
     """Convert text to speech using ElevenLabs Flash v2.5."""
     def _sync_tts():
@@ -1906,8 +1912,11 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await processing_msg.edit_text("Transcribing...")
         text = await transcribe_voice(bytes(voice_bytes))
 
-        if text.startswith("[Transcription error"):
-            await processing_msg.edit_text(text)
+        if not is_valid_transcription(text):
+            if text.startswith("[Transcription error"):
+                await processing_msg.edit_text(f"❌ Couldn't transcribe audio.\n{text}")
+            else:
+                await processing_msg.edit_text("❌ Couldn't hear anything. Try speaking more clearly.")
             return
 
         # Prepend compact summary if pending from /compact
