@@ -418,20 +418,33 @@ def apply_saved_credentials():
         os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = creds["claude_token"]
         logger.debug("Applied saved Claude token")
 
+    new_elevenlabs_key = None
+    new_openai_key = None
+
     if creds.get("elevenlabs_key"):
         ELEVENLABS_API_KEY = creds["elevenlabs_key"]
         os.environ["ELEVENLABS_API_KEY"] = creds["elevenlabs_key"]
         elevenlabs = ElevenLabs(api_key=ELEVENLABS_API_KEY)
+        new_elevenlabs_key = creds["elevenlabs_key"]
         logger.debug("Applied saved ElevenLabs key")
 
     if creds.get("openai_key"):
         os.environ["OPENAI_API_KEY"] = creds["openai_key"]
         openai_client = OpenAIClient(api_key=creds["openai_key"])
+        new_openai_key = creds["openai_key"]
         logger.debug("Applied saved OpenAI key")
 
     # Re-resolve providers after credentials are loaded
     TTS_PROVIDER = resolve_provider("TTS_PROVIDER")
     STT_PROVIDER = resolve_provider("STT_PROVIDER")
+
+    # Sync voice_service clients
+    voice_service.reconfigure(
+        elevenlabs_key=new_elevenlabs_key,
+        openai_key=new_openai_key,
+        tts_provider=TTS_PROVIDER,
+        stt_provider=STT_PROVIDER,
+    )
 
 
 def get_mcp_status(settings_file: str) -> list[str]:
@@ -516,111 +529,13 @@ def get_user_settings(user_id: int) -> dict:
     return user_settings[user_id_str]
 
 
-async def _transcribe_elevenlabs(voice_bytes: bytes) -> str:
-    """Transcribe voice using ElevenLabs Scribe."""
-    try:
-        transcription = await asyncio.to_thread(
-            elevenlabs.speech_to_text.convert,
-            file=BytesIO(voice_bytes),
-            model_id="scribe_v1",
-            language_code=STT_LANGUAGE or None,
-        )
-        return transcription.text
-    except Exception as e:
-        logger.error(f"ElevenLabs STT error: {e}")
-        raise
-
-
-async def _transcribe_openai(voice_bytes: bytes) -> str:
-    """Transcribe voice using OpenAI Whisper."""
-    try:
-        lang = STT_LANGUAGE or None
-        kwargs = {
-            "model": OPENAI_STT_MODEL,
-            "file": ("voice.ogg", BytesIO(voice_bytes), "audio/ogg"),
-        }
-        if lang:
-            kwargs["language"] = lang
-        result = await asyncio.to_thread(openai_client.audio.transcriptions.create, **kwargs)
-        return result.text
-    except Exception as e:
-        logger.error(f"OpenAI STT error: {e}")
-        raise
-
-
-async def transcribe_voice(voice_bytes: bytes) -> str:
-    """Transcribe voice — routes to active STT provider."""
-    try:
-        if STT_PROVIDER == "openai":
-            return await _transcribe_openai(voice_bytes)
-        if STT_PROVIDER == "elevenlabs":
-            return await _transcribe_elevenlabs(voice_bytes)
-        return "[Transcription error: no STT provider configured]"
-    except Exception as e:
-        return f"[Transcription error: {e}]"
-
-
-def is_valid_transcription(text: str) -> bool:
-    """Return True if transcription is usable — not empty and not an error string."""
-    stripped = text.strip()
-    return bool(stripped) and not stripped.startswith("[Transcription error")
-
-
-async def _tts_elevenlabs(text: str, speed: float = None) -> BytesIO:
-    """Convert text to speech using ElevenLabs Flash v2.5."""
-    def _sync_tts():
-        kwargs = dict(
-            text=text,
-            voice_id=ELEVENLABS_VOICE_ID,
-            model_id="eleven_flash_v2_5",
-            output_format="mp3_44100_128",
-        )
-        if speed is not None:
-            kwargs["voice_settings"] = {"speed": speed}
-        audio = elevenlabs.text_to_speech.convert(**kwargs)
-        buf = BytesIO()
-        for chunk in audio:
-            if isinstance(chunk, bytes):
-                buf.write(chunk)
-        buf.seek(0)
-        return buf
-    return await asyncio.to_thread(_sync_tts)
-
-
-async def _tts_openai(text: str, speed: float = None) -> BytesIO:
-    """Convert text to speech using OpenAI TTS."""
-    def _sync_tts():
-        kwargs = dict(model=OPENAI_TTS_MODEL, voice=OPENAI_VOICE_ID, input=text)
-        if OPENAI_VOICE_INSTRUCTIONS:
-            kwargs["instructions"] = OPENAI_VOICE_INSTRUCTIONS
-        if speed is not None:
-            kwargs["speed"] = speed
-        response = openai_client.audio.speech.create(**kwargs)
-        buf = BytesIO()
-        for chunk in response.iter_bytes(chunk_size=4096):
-            buf.write(chunk)
-        buf.seek(0)
-        return buf
-    return await asyncio.to_thread(_sync_tts)
-
-
-async def text_to_speech(text: str, speed: float = None) -> BytesIO:
-    """Convert text to speech — routes to active TTS provider."""
-    try:
-        if TTS_PROVIDER == "openai":
-            return await _tts_openai(text, speed)
-        if TTS_PROVIDER == "elevenlabs":
-            return await _tts_elevenlabs(text, speed)
-        logger.debug("TTS skipped: no provider configured")
-        return None
-    except Exception as e:
-        logger.error(f"TTS error: {e}")
-        return None
-
-
-def format_tts_fallback(response_text: str) -> str:
-    """Format response as text when TTS fails silently — adds a notice."""
-    return f"🔇 Voice generation failed — here's the text:\n\n{response_text}"
+import voice_service
+from voice_service import (
+    transcribe_voice,
+    is_valid_transcription,
+    text_to_speech,
+    format_tts_fallback,
+)
 
 
 def error_message(context: str, exc: Exception) -> str:
@@ -1770,6 +1685,7 @@ async def cmd_elevenlabs_key(update: Update, context: ContextTypes.DEFAULT_TYPE)
     # Apply immediately
     ELEVENLABS_API_KEY = key
     elevenlabs = ElevenLabs(api_key=key)
+    voice_service.reconfigure(elevenlabs_key=key, tts_provider=TTS_PROVIDER)
 
     await update.effective_chat.send_message(
         "✓ ElevenLabs API key saved and applied!",
@@ -1823,6 +1739,7 @@ async def cmd_openai_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
     openai_client = OpenAIClient(api_key=key)
     TTS_PROVIDER = resolve_provider("TTS_PROVIDER")
     STT_PROVIDER = resolve_provider("STT_PROVIDER")
+    voice_service.reconfigure(openai_key=key, tts_provider=TTS_PROVIDER, stt_provider=STT_PROVIDER)
 
     await update.effective_chat.send_message(
         f"✓ OpenAI API key saved and applied!\n"

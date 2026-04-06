@@ -944,3 +944,13 @@ class TestErrorMessages:
         long_exc = Exception("x" * 300)
         msg = bot.error_message("ctx", long_exc)
         assert len(msg) < 200
+
+
+class TestVoiceServiceImport:
+    def test_voice_service_is_importable(self):
+        import voice_service
+        assert callable(voice_service.transcribe_voice)
+        assert callable(voice_service.text_to_speech)
+        assert callable(voice_service.is_valid_transcription)
+        assert callable(voice_service.format_tts_fallback)
+        assert callable(voice_service.reconfigure)
