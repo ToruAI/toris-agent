@@ -1483,18 +1483,21 @@ async def handle_automations_callback(update: Update, context: ContextTypes.DEFA
     # ── Run now ───────────────────────────────────────────────
     elif data.startswith("auto_run_"):
         trigger_id = data[len("auto_run_"):]
+        await query.answer("▶ Uruchamiam...")
         ok = await run_remote_trigger_run(trigger_id)
-        if ok:
-            await query.answer("✓ Uruchomiono!", show_alert=True)
-        else:
-            await query.answer("❌ Błąd uruchamiania", show_alert=True)
+        status = "✓ Uruchomiono!" if ok else "❌ Błąd uruchamiania"
+        try:
+            await query.edit_message_text(query.message.text + f"\n\n{status}", reply_markup=query.message.reply_markup)
+        except Exception:
+            pass
 
     # ── Toggle enable/disable ─────────────────────────────────
     elif data.startswith("auto_toggle_"):
         # format: auto_toggle_off_{id} or auto_toggle_on_{id}
         rest = data[len("auto_toggle_"):]
         enable = rest.startswith("on_")
-        trigger_id = rest[3:]  # strip "on_" or "off_"
+        trigger_id = rest[len("on_"):] if enable else rest[len("off_"):]
+        await query.answer()
         ok = await run_remote_trigger_toggle(trigger_id, enable=enable)
         if ok:
             # Refresh card
@@ -1502,16 +1505,17 @@ async def handle_automations_callback(update: Update, context: ContextTypes.DEFA
             trigger = next((t for t in triggers if t["id"] == trigger_id), None)
             if trigger:
                 text, markup = build_automation_card(trigger, style=card_style)
-                await query.answer()
                 await query.edit_message_text(text, reply_markup=markup)
             else:
                 # Trigger disappeared after toggle — show list instead
                 triggers2 = await run_remote_trigger_list()
                 text2, markup2 = build_automations_list(triggers2)
-                await query.answer()
                 await query.edit_message_text(text2, reply_markup=markup2)
         else:
-            await query.answer("❌ Błąd zmiany stanu", show_alert=True)
+            try:
+                await query.edit_message_text("❌ Błąd zmiany stanu automacji.", reply_markup=query.message.reply_markup)
+            except Exception:
+                pass
 
     # ── New automation ────────────────────────────────────────
     elif data == "auto_new":
