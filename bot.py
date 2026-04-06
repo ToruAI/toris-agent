@@ -157,6 +157,7 @@ TOPIC_ID = os.getenv("TELEGRAM_TOPIC_ID")  # Empty = all topics, set = only this
 CLAUDE_WORKING_DIR = os.getenv("CLAUDE_WORKING_DIR", os.path.expanduser("~"))
 SANDBOX_DIR = os.getenv("CLAUDE_SANDBOX_DIR", os.path.join(os.path.expanduser("~"), "claude-voice-sandbox"))
 MAX_VOICE_CHARS = int(os.getenv("MAX_VOICE_RESPONSE_CHARS", "500"))
+CLAUDE_TIMEOUT = int(os.getenv("CLAUDE_TIMEOUT", "300"))  # Max seconds to wait for Claude response
 
 # Persona config
 PERSONA_NAME = os.getenv("PERSONA_NAME", "Assistant")
@@ -873,7 +874,8 @@ async def call_claude(
             cancel_events[user_id_for_cancel] = asyncio.Event()
         cancel_events[user_id_for_cancel].clear()  # Reset at start of each call
 
-    try:
+    async def _run_claude():
+        nonlocal result_text, new_session_id, tool_count, tool_log, debug_msg
         logger.debug(f">>> Starting ClaudeSDKClient with prompt: {len(full_prompt)} chars")
         async with ClaudeSDKClient(options=options) as client:
             await client.query(full_prompt)
@@ -937,8 +939,13 @@ async def call_claude(
 
         logger.debug(f"Claude SDK responded: {len(result_text)} chars, {tool_count} tools used")
         metadata["tool_log"] = tool_log
-        return result_text, new_session_id, metadata
 
+    try:
+        await asyncio.wait_for(_run_claude(), timeout=CLAUDE_TIMEOUT)
+        return result_text, new_session_id, metadata
+    except asyncio.TimeoutError:
+        logger.error(f"Claude call timed out after {CLAUDE_TIMEOUT}s")
+        return f"⏱️ Toris timed out after {CLAUDE_TIMEOUT}s. Try a simpler request or /cancel.", session_id, {}
     except Exception as e:
         logger.error(f"Claude SDK error: {e}")
         return f"Error calling Claude: {e}", session_id, {}

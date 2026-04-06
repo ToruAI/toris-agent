@@ -806,3 +806,15 @@ class TestStateLocking:
         bot.save_settings()
         assert (tmp_path / "settings.json").exists()
         assert not (tmp_path / "settings.json.tmp").exists()
+
+
+class TestClaudeTimeout:
+    def test_claude_timeout_default_is_int(self):
+        assert isinstance(bot.CLAUDE_TIMEOUT, int)
+        assert bot.CLAUDE_TIMEOUT > 0
+
+    def test_claude_timeout_from_env(self, monkeypatch):
+        monkeypatch.setenv("CLAUDE_TIMEOUT", "120")
+        import importlib
+        importlib.reload(bot)
+        assert bot.CLAUDE_TIMEOUT == 120
