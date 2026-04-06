@@ -914,3 +914,33 @@ class TestSessionNaming:
         text = bot.format_sessions_list(sessions)
         assert "project analysis" in text
         assert "(unnamed)" in text
+
+
+class TestErrorMessages:
+    def test_rate_limit_error(self):
+        msg = bot.error_message("Claude call", Exception("rate limit exceeded 429"))
+        assert "Rate limit" in msg
+        assert "❌" in msg
+
+    def test_timeout_error(self):
+        msg = bot.error_message("STT", Exception("request timeout"))
+        assert "Timed out" in msg
+        assert "❌" in msg
+
+    def test_auth_error(self):
+        msg = bot.error_message("TTS", Exception("401 Unauthorized"))
+        assert "Authentication" in msg
+
+    def test_network_error(self):
+        msg = bot.error_message("Voice", Exception("network connection refused"))
+        assert "Network" in msg
+
+    def test_generic_error_includes_context(self):
+        msg = bot.error_message("TTS", Exception("Something broke"))
+        assert "TTS" in msg
+        assert "❌" in msg
+
+    def test_generic_error_truncated(self):
+        long_exc = Exception("x" * 300)
+        msg = bot.error_message("ctx", long_exc)
+        assert len(msg) < 200

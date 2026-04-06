@@ -623,6 +623,20 @@ def format_tts_fallback(response_text: str) -> str:
     return f"🔇 Voice generation failed — here's the text:\n\n{response_text}"
 
 
+def error_message(context: str, exc: Exception) -> str:
+    """Return a user-friendly error string with just enough context."""
+    exc_str = str(exc)
+    if "rate" in exc_str.lower() or "429" in exc_str:
+        return f"❌ {context}: Rate limit hit. Wait a moment and try again."
+    if "timeout" in exc_str.lower():
+        return f"❌ {context}: Timed out. The service may be slow — try again."
+    if "auth" in exc_str.lower() or "401" in exc_str or "403" in exc_str:
+        return f"❌ {context}: Authentication failed. Check API keys."
+    if "connect" in exc_str.lower() or "network" in exc_str.lower():
+        return f"❌ {context}: Network error. Check your connection."
+    return f"❌ {context}: {exc_str[:120]}"
+
+
 async def send_long_message(update: Update, first_msg, text: str, chunk_size: int = 4000):
     """Split long text into multiple Telegram messages.
 
@@ -1182,7 +1196,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/sessions - List all sessions\n"
         "/switch <name> - Switch to session\n"
         "/status - Current session info\n"
-        "/settings - Configure audio and voice speed"
+        "/settings - Configure audio and voice speed\n"
+        "/health - Check Claude, STT, TTS status"
     )
 
 
@@ -2050,8 +2065,8 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(format_tts_fallback(tts_text))
 
     except Exception as e:
-        logger.error(f"Error in handle_voice: {e}")
-        await processing_msg.edit_text(f"Error: {e}")
+        logger.exception("Error in handle_voice")
+        await processing_msg.edit_text(error_message("Voice processing failed", e))
     finally:
         typing_stop.set()
 
@@ -2135,8 +2150,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(format_tts_fallback(tts_text))
 
     except Exception as e:
-        logger.error(f"Error in handle_text: {e}")
-        await processing_msg.edit_text(f"Error: {e}")
+        logger.exception("Error in handle_text")
+        await processing_msg.edit_text(error_message("Text processing failed", e))
     finally:
         typing_stop.set()
 
@@ -2234,8 +2249,8 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(format_tts_fallback(tts_text))
 
     except Exception as e:
-        logger.error(f"Error in handle_photo: {e}")
-        await processing_msg.edit_text(f"Error: {e}")
+        logger.exception("Error in handle_photo")
+        await processing_msg.edit_text(error_message("Photo processing failed", e))
     finally:
         typing_stop.set()
 
