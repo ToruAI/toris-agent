@@ -285,6 +285,19 @@ elevenlabs = ElevenLabs(api_key=ELEVENLABS_API_KEY)
 # Session state per user
 user_sessions = {}  # {user_id: {"current_session": "session_id", "sessions": []}}
 
+# Per-user asyncio locks — prevent concurrent state corruption with concurrent_updates=True
+_user_locks: dict[str, asyncio.Lock] = {}
+_user_locks_mutex = __import__("threading").Lock()
+
+
+def get_user_lock(user_id: str) -> asyncio.Lock:
+    """Return asyncio.Lock for user_id (creates one if needed). Thread-safe."""
+    with _user_locks_mutex:
+        if user_id not in _user_locks:
+            _user_locks[user_id] = asyncio.Lock()
+        return _user_locks[user_id]
+
+
 # User settings per user
 user_settings = {}  # {user_id: {"audio_enabled": bool, "voice_speed": float, "mode": str, "watch_enabled": bool}}
 
@@ -361,9 +374,14 @@ def load_state():
 
 
 def save_state():
-    """Save session state to file."""
-    with open(STATE_FILE, "w") as f:
-        json.dump(user_sessions, f, indent=2)
+    """Atomically save session state (write to .tmp, then rename — safe for concurrent handlers)."""
+    tmp = Path(str(STATE_FILE) + ".tmp")
+    try:
+        tmp.write_text(json.dumps(user_sessions, indent=2))
+        tmp.replace(STATE_FILE)
+    except OSError as e:
+        logger.error(f"Failed to save state: {e}")
+        tmp.unlink(missing_ok=True)
 
 
 def load_settings():
@@ -380,9 +398,14 @@ def load_settings():
 
 
 def save_settings():
-    """Save user settings to file."""
-    with open(SETTINGS_FILE, "w") as f:
-        json.dump(user_settings, f, indent=2)
+    """Atomically save user settings (write to .tmp, then rename — safe for concurrent handlers)."""
+    tmp = Path(str(SETTINGS_FILE) + ".tmp")
+    try:
+        tmp.write_text(json.dumps(user_settings, indent=2))
+        tmp.replace(SETTINGS_FILE)
+    except OSError as e:
+        logger.error(f"Failed to save settings: {e}")
+        tmp.unlink(missing_ok=True)
 
 
 # Credentials file for user-provided API keys
@@ -1946,11 +1969,12 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
         # Update session state
-        if new_session_id and new_session_id != state["current_session"]:
-            state["current_session"] = new_session_id
-            if new_session_id not in state["sessions"]:
-                state["sessions"].append(new_session_id)
-            save_state()
+        async with get_user_lock(str(user_id)):
+            if new_session_id and new_session_id != state["current_session"]:
+                state["current_session"] = new_session_id
+                if new_session_id not in state["sessions"]:
+                    state["sessions"].append(new_session_id)
+                save_state()
 
         # Send text response (split if too long)
         tool_log = metadata.get("tool_log", [])
@@ -2023,11 +2047,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             processing_msg=processing_msg,
         )
 
-        if new_session_id and new_session_id != state["current_session"]:
-            state["current_session"] = new_session_id
-            if new_session_id not in state["sessions"]:
-                state["sessions"].append(new_session_id)
-            save_state()
+        async with get_user_lock(str(user_id)):
+            if new_session_id and new_session_id != state["current_session"]:
+                state["current_session"] = new_session_id
+                if new_session_id not in state["sessions"]:
+                    state["sessions"].append(new_session_id)
+                save_state()
 
         # Send text response (split if too long)
         tool_log = metadata.get("tool_log", [])
@@ -2116,11 +2141,12 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             processing_msg=processing_msg,
         )
 
-        if new_session_id and new_session_id != state["current_session"]:
-            state["current_session"] = new_session_id
-            if new_session_id not in state["sessions"]:
-                state["sessions"].append(new_session_id)
-            save_state()
+        async with get_user_lock(str(user_id)):
+            if new_session_id and new_session_id != state["current_session"]:
+                state["current_session"] = new_session_id
+                if new_session_id not in state["sessions"]:
+                    state["sessions"].append(new_session_id)
+                save_state()
 
         tool_log = metadata.get("tool_log", [])
         await finalize_response(update, processing_msg, response)
