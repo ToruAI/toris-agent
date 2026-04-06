@@ -1,7 +1,15 @@
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from bot import cron_to_human
+import asyncio
+import json
+import subprocess
+from unittest.mock import patch, MagicMock
+
+from bot import cron_to_human, run_remote_trigger_list, run_remote_trigger_run, run_remote_trigger_toggle
+
+def _run(coro):
+    return asyncio.run(coro)
 
 def test_daily():
     assert cron_to_human("0 7 * * *") == "Codziennie 07:00"
@@ -20,16 +28,6 @@ def test_unknown_falls_back():
 
 def test_zero_padded():
     assert cron_to_human("0 8 * * *") == "Codziennie 08:00"
-
-import json, subprocess
-from unittest.mock import patch, MagicMock
-import asyncio
-
-# Import the helpers (they will be added to bot.py)
-from bot import run_remote_trigger_list, run_remote_trigger_run, run_remote_trigger_toggle
-
-def _run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
 
 def test_list_returns_triggers():
     mock_output = json.dumps({
