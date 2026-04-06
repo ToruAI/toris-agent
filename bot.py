@@ -1439,9 +1439,9 @@ async def cmd_automations(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_automations_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle all auto_* callback button taps."""
     query = update.callback_query
-    await query.answer()
 
     if not _is_authorized(update):
+        await query.answer()
         return
 
     data = query.data
@@ -1451,6 +1451,7 @@ async def handle_automations_callback(update: Update, context: ContextTypes.DEFA
 
     # ── Back to list ──────────────────────────────────────────
     if data in ("auto_list", "auto_refresh"):
+        await query.answer()
         await query.edit_message_text("⏳ Ładuję automacje...")
         triggers = await run_remote_trigger_list()
         text, markup = build_automations_list(triggers)
@@ -1461,6 +1462,7 @@ async def handle_automations_callback(update: Update, context: ContextTypes.DEFA
 
     # ── Open card ─────────────────────────────────────────────
     elif data.startswith("auto_card_"):
+        await query.answer()
         trigger_id = data[len("auto_card_"):]
         await query.edit_message_text("⏳...")
         triggers = await run_remote_trigger_list()
@@ -1497,22 +1499,31 @@ async def handle_automations_callback(update: Update, context: ContextTypes.DEFA
             if trigger:
                 text, markup = build_automation_card(trigger, style=card_style)
                 await query.edit_message_text(text, reply_markup=markup)
+                await query.answer()
+            else:
+                # Trigger disappeared after toggle — show list instead
+                triggers2 = await run_remote_trigger_list()
+                text2, markup2 = build_automations_list(triggers2)
+                await query.edit_message_text(text2, reply_markup=markup2)
+                await query.answer()
         else:
             await query.answer("❌ Błąd zmiany stanu", show_alert=True)
 
     # ── New automation ────────────────────────────────────────
     elif data == "auto_new":
+        await query.answer()
         await query.edit_message_text(
-            "💬 Opisz automację głosem lub tekstem.\n\n"
-            "Np. \u201estwórz daily standup o 8 rano sprawdzający PR-y na GitHubie\u201d"
+            '💬 Opisz automację głosem lub tekstem.\n\n'
+            'Np. „stwórz daily standup o 8 rano sprawdzający PR-y na GitHubie"'
         )
 
     # ── Edit prompt (conversational) ──────────────────────────
     elif data.startswith("auto_edit_"):
+        await query.answer()
         trigger_id = data[len("auto_edit_"):]
         await query.edit_message_text(
-            "✎ Co chcesz zmienić w tej automacji?\n\n"
-            "Opisz głosem lub tekstem \u2014 np. \u201ezmień godzinę na 9 rano\u201d albo \u201edodaj sprawdzanie CI\u201d"
+            '✎ Co chcesz zmienić w tej automacji?\n\n'
+            'Opisz głosem lub tekstem — np. „zmień godzinę na 9 rano" albo „dodaj sprawdzanie CI"'
         )
 
 
