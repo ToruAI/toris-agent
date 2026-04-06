@@ -764,12 +764,14 @@ class TestBuildClaudeOptions:
         assert options.can_use_tool is fn
 
     def test_settings_file_attached_when_configured(self, monkeypatch):
-        monkeypatch.setattr(bot, "CLAUDE_SETTINGS_FILE", "/fake/settings.json")
+        import claude_service
+        monkeypatch.setattr(claude_service._cfg, "CLAUDE_SETTINGS_FILE", "/fake/settings.json")
         options = bot.build_claude_options("test", "go_all")
         assert options.settings == "/fake/settings.json"
 
     def test_no_settings_file_when_not_configured(self, monkeypatch):
-        monkeypatch.setattr(bot, "CLAUDE_SETTINGS_FILE", "")
+        import claude_service
+        monkeypatch.setattr(claude_service._cfg, "CLAUDE_SETTINGS_FILE", "")
         options = bot.build_claude_options("test", "go_all")
         assert not getattr(options, "settings", None)
 
@@ -954,3 +956,13 @@ class TestVoiceServiceImport:
         assert callable(voice_service.is_valid_transcription)
         assert callable(voice_service.format_tts_fallback)
         assert callable(voice_service.reconfigure)
+
+
+class TestClaudeServiceImport:
+    def test_claude_service_is_importable(self):
+        import claude_service
+        assert callable(claude_service.call_claude)
+        assert callable(claude_service.build_claude_options)
+        assert callable(claude_service.build_dynamic_prompt)
+        assert callable(claude_service.configure)
+        assert hasattr(claude_service, "WorkingIndicator")
