@@ -1436,6 +1436,86 @@ async def cmd_automations(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(text, reply_markup=markup)
 
 
+async def handle_automations_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle all auto_* callback button taps."""
+    query = update.callback_query
+    await query.answer()
+
+    if not _is_authorized(update):
+        return
+
+    data = query.data
+    user_id = update.effective_user.id
+    settings = get_user_settings(user_id)
+    card_style = settings.get("automation_card_style", "full")
+
+    # ── Back to list ──────────────────────────────────────────
+    if data in ("auto_list", "auto_refresh"):
+        await query.edit_message_text("⏳ Ładuję automacje...")
+        triggers = await run_remote_trigger_list()
+        text, markup = build_automations_list(triggers)
+        try:
+            await query.edit_message_text(text, reply_markup=markup)
+        except Exception as e:
+            logger.warning(f"auto_list edit error: {e}")
+
+    # ── Open card ─────────────────────────────────────────────
+    elif data.startswith("auto_card_"):
+        trigger_id = data[len("auto_card_"):]
+        await query.edit_message_text("⏳...")
+        triggers = await run_remote_trigger_list()
+        trigger = next((t for t in triggers if t["id"] == trigger_id), None)
+        if trigger is None:
+            await query.edit_message_text("❌ Nie znaleziono automacji.")
+            return
+        text, markup = build_automation_card(trigger, style=card_style)
+        try:
+            await query.edit_message_text(text, reply_markup=markup)
+        except Exception as e:
+            logger.warning(f"auto_card edit error: {e}")
+
+    # ── Run now ───────────────────────────────────────────────
+    elif data.startswith("auto_run_"):
+        trigger_id = data[len("auto_run_"):]
+        ok = await run_remote_trigger_run(trigger_id)
+        if ok:
+            await query.answer("✓ Uruchomiono!", show_alert=True)
+        else:
+            await query.answer("❌ Błąd uruchamiania", show_alert=True)
+
+    # ── Toggle enable/disable ─────────────────────────────────
+    elif data.startswith("auto_toggle_"):
+        # format: auto_toggle_off_{id} or auto_toggle_on_{id}
+        rest = data[len("auto_toggle_"):]
+        enable = rest.startswith("on_")
+        trigger_id = rest[3:]  # strip "on_" or "off_"
+        ok = await run_remote_trigger_toggle(trigger_id, enable=enable)
+        if ok:
+            # Refresh card
+            triggers = await run_remote_trigger_list()
+            trigger = next((t for t in triggers if t["id"] == trigger_id), None)
+            if trigger:
+                text, markup = build_automation_card(trigger, style=card_style)
+                await query.edit_message_text(text, reply_markup=markup)
+        else:
+            await query.answer("❌ Błąd zmiany stanu", show_alert=True)
+
+    # ── New automation ────────────────────────────────────────
+    elif data == "auto_new":
+        await query.edit_message_text(
+            "💬 Opisz automację głosem lub tekstem.\n\n"
+            "Np. \u201estwórz daily standup o 8 rano sprawdzający PR-y na GitHubie\u201d"
+        )
+
+    # ── Edit prompt (conversational) ──────────────────────────
+    elif data.startswith("auto_edit_"):
+        trigger_id = data[len("auto_edit_"):]
+        await query.edit_message_text(
+            "✎ Co chcesz zmienić w tej automacji?\n\n"
+            "Opisz głosem lub tekstem \u2014 np. \u201ezmień godzinę na 9 rano\u201d albo \u201edodaj sprawdzanie CI\u201d"
+        )
+
+
 # ============ Token Configuration Commands ============
 
 async def cmd_setup(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2046,6 +2126,7 @@ def main():
     # Callback handlers for inline keyboards
     app.add_handler(CallbackQueryHandler(handle_settings_callback, pattern="^setting_"))
     app.add_handler(CallbackQueryHandler(handle_approval_callback, pattern="^(approve_|reject_)"))
+    app.add_handler(CallbackQueryHandler(handle_automations_callback, pattern="^auto_"))
 
     # Messages
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
