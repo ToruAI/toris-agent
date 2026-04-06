@@ -35,21 +35,6 @@ from automations import (
     build_automation_card,
 )
 
-# Claude Agent SDK (official SDK for Claude Code)
-from claude_agent_sdk import (
-    query as claude_query,
-    ClaudeAgentOptions,
-    ClaudeSDKClient,
-)
-from claude_agent_sdk.types import (
-    AssistantMessage,
-    ResultMessage,
-    TextBlock,
-    ToolUseBlock,
-    PermissionResultAllow,
-    PermissionResultDeny,
-)
-
 load_dotenv()
 
 

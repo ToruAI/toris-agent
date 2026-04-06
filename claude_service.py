@@ -8,6 +8,7 @@ import asyncio
 import json
 import logging
 import subprocess
+import uuid
 from datetime import datetime
 from pathlib import Path
 
@@ -218,7 +219,6 @@ async def call_claude(
             return PermissionResultAllow()
 
         # Generate unique approval ID
-        import uuid
         current_approval_id = str(uuid.uuid4())[:8]
         approval_event = asyncio.Event()
 
