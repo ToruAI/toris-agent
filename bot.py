@@ -952,6 +952,67 @@ def cron_to_human(expr: str) -> str:
     return expr
 
 
+async def run_remote_trigger_list() -> list[dict]:
+    """Fetch all scheduled triggers via claude -p. Returns list of trigger dicts."""
+    prompt = (
+        "List all my scheduled remote triggers using RemoteTrigger tool with action='list'. "
+        "Return ONLY a JSON array where each item has: id (string), name (string), "
+        "cron_expression (string), enabled (boolean). No other text."
+    )
+    cmd = ["claude", "-p", prompt, "--allowedTools", "RemoteTrigger", "--output-format", "json"]
+    try:
+        result = await asyncio.to_thread(
+            subprocess.run, cmd, capture_output=True, text=True, timeout=30
+        )
+        if result.returncode != 0:
+            logger.warning(f"run_remote_trigger_list failed: {result.stderr[:200]}")
+            return []
+        data = json.loads(result.stdout)
+        raw = data.get("result", "[]")
+        # Strip markdown code fences if present
+        raw = raw.strip()
+        if raw.startswith("```"):
+            raw = "\n".join(raw.split("\n")[1:])
+            raw = raw.rstrip("`").strip()
+        return json.loads(raw)
+    except Exception as e:
+        logger.warning(f"run_remote_trigger_list exception: {e}")
+        return []
+
+
+async def run_remote_trigger_run(trigger_id: str) -> bool:
+    """Trigger a scheduled task to run immediately via claude -p."""
+    prompt = f"Run the scheduled remote trigger with ID '{trigger_id}' immediately using RemoteTrigger tool with action='run'."
+    cmd = ["claude", "-p", prompt, "--allowedTools", "RemoteTrigger", "--output-format", "json"]
+    try:
+        result = await asyncio.to_thread(
+            subprocess.run, cmd, capture_output=True, text=True, timeout=30
+        )
+        return result.returncode == 0
+    except Exception as e:
+        logger.warning(f"run_remote_trigger_run exception: {e}")
+        return False
+
+
+async def run_remote_trigger_toggle(trigger_id: str, enable: bool) -> bool:
+    """Enable or disable a scheduled trigger via claude -p."""
+    state = "enabled" if enable else "disabled"
+    prompt = (
+        f"Update the scheduled remote trigger with ID '{trigger_id}' using RemoteTrigger tool "
+        f"with action='update'. Set enabled={str(enable).lower()}. "
+        f"The trigger should be {state} after this call."
+    )
+    cmd = ["claude", "-p", prompt, "--allowedTools", "RemoteTrigger", "--output-format", "json"]
+    try:
+        result = await asyncio.to_thread(
+            subprocess.run, cmd, capture_output=True, text=True, timeout=30
+        )
+        return result.returncode == 0
+    except Exception as e:
+        logger.warning(f"run_remote_trigger_toggle exception: {e}")
+        return False
+
+
 # ============ Command Handlers ============
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
