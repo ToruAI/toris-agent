@@ -22,6 +22,7 @@ os.environ.setdefault("TELEGRAM_DEFAULT_CHAT_ID", "0")
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import bot
+import config
 
 
 # ─────────────────────────────────────────────
@@ -36,31 +37,31 @@ class TestResolveProvider:
 
     def test_explicit_elevenlabs(self):
         os.environ["TTS_PROVIDER"] = "elevenlabs"
-        assert bot.resolve_provider("TTS_PROVIDER") == "elevenlabs"
+        assert config.resolve_provider("TTS_PROVIDER") == "elevenlabs"
 
     def test_explicit_openai(self):
         os.environ["TTS_PROVIDER"] = "openai"
-        assert bot.resolve_provider("TTS_PROVIDER") == "openai"
+        assert config.resolve_provider("TTS_PROVIDER") == "openai"
 
     def test_explicit_invalid_ignored(self):
         os.environ["TTS_PROVIDER"] = "invalid"
-        assert bot.resolve_provider("TTS_PROVIDER") == "none"
+        assert config.resolve_provider("TTS_PROVIDER") == "none"
 
     def test_fallback_elevenlabs(self):
         os.environ["ELEVENLABS_API_KEY"] = "sk_test"
-        assert bot.resolve_provider("TTS_PROVIDER") == "elevenlabs"
+        assert config.resolve_provider("TTS_PROVIDER") == "elevenlabs"
 
     def test_fallback_openai_when_no_elevenlabs(self):
         os.environ["OPENAI_API_KEY"] = "sk-test"
-        assert bot.resolve_provider("TTS_PROVIDER") == "openai"
+        assert config.resolve_provider("TTS_PROVIDER") == "openai"
 
     def test_elevenlabs_wins_over_openai(self):
         os.environ["ELEVENLABS_API_KEY"] = "sk_test"
         os.environ["OPENAI_API_KEY"] = "sk-test"
-        assert bot.resolve_provider("TTS_PROVIDER") == "elevenlabs"
+        assert config.resolve_provider("TTS_PROVIDER") == "elevenlabs"
 
     def test_none_when_no_keys(self):
-        assert bot.resolve_provider("TTS_PROVIDER") == "none"
+        assert config.resolve_provider("TTS_PROVIDER") == "none"
 
     def teardown_method(self):
         for var in ("TTS_PROVIDER", "STT_PROVIDER", "ELEVENLABS_API_KEY", "OPENAI_API_KEY"):
@@ -816,5 +817,6 @@ class TestClaudeTimeout:
     def test_claude_timeout_from_env(self, monkeypatch):
         monkeypatch.setenv("CLAUDE_TIMEOUT", "120")
         import importlib
+        importlib.reload(config)
         importlib.reload(bot)
         assert bot.CLAUDE_TIMEOUT == 120

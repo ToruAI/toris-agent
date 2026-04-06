@@ -45,17 +45,6 @@ from claude_agent_sdk.types import (
 load_dotenv()
 
 
-def resolve_provider(explicit_env: str) -> str:
-    """Resolve voice provider: explicit > elevenlabs (if key) > openai (if key) > none."""
-    explicit = os.getenv(explicit_env, "").lower()
-    if explicit in ("openai", "elevenlabs"):
-        return explicit
-    if os.getenv("ELEVENLABS_API_KEY"):
-        return "elevenlabs"
-    if os.getenv("OPENAI_API_KEY"):
-        return "openai"
-    return "none"
-
 
 def check_claude_auth() -> tuple[bool, str]:
     """Check if Claude authentication is configured.
@@ -145,43 +134,31 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Config
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
-ALLOWED_CHAT_ID = int(os.getenv("TELEGRAM_DEFAULT_CHAT_ID", "0"))
-# Admin user IDs (comma-separated) - required for /setup, /claude_token, etc.
-# If empty, falls back to chat-ID check only (backward compat)
-_admin_ids_raw = os.getenv("TELEGRAM_ADMIN_USER_IDS", "")
-ADMIN_USER_IDS = set(int(uid.strip()) for uid in _admin_ids_raw.split(",") if uid.strip()) if _admin_ids_raw.strip() else set()
-TOPIC_ID = os.getenv("TELEGRAM_TOPIC_ID")  # Empty = all topics, set = only this topic
-CLAUDE_WORKING_DIR = os.getenv("CLAUDE_WORKING_DIR", os.path.expanduser("~"))
-SANDBOX_DIR = os.getenv("CLAUDE_SANDBOX_DIR", os.path.join(os.path.expanduser("~"), "claude-voice-sandbox"))
-MAX_VOICE_CHARS = int(os.getenv("MAX_VOICE_RESPONSE_CHARS", "500"))
-CLAUDE_TIMEOUT = int(os.getenv("CLAUDE_TIMEOUT", "300"))  # Max seconds to wait for Claude response
-
-# Persona config
-PERSONA_NAME = os.getenv("PERSONA_NAME", "Assistant")
-SYSTEM_PROMPT_FILE = os.getenv("SYSTEM_PROMPT_FILE", "")
-ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "JBFqnCBsd6RMkjVDRZzb")  # Default: George
-CLAUDE_SETTINGS_FILE = os.getenv("CLAUDE_SETTINGS_FILE", "")  # Optional settings.json for permissions
-if CLAUDE_SETTINGS_FILE and not os.path.isabs(CLAUDE_SETTINGS_FILE):
-    CLAUDE_SETTINGS_FILE = str(Path(__file__).parent / CLAUDE_SETTINGS_FILE)
-
-# Voice provider selection (resolved at startup)
-TTS_PROVIDER = resolve_provider("TTS_PROVIDER")  # "elevenlabs", "openai", or "none"
-STT_PROVIDER = resolve_provider("STT_PROVIDER")  # "elevenlabs", "openai", or "none"
-
-# OpenAI voice config
-OPENAI_VOICE_ID = os.getenv("OPENAI_VOICE_ID", "coral")
-OPENAI_TTS_MODEL = os.getenv("OPENAI_TTS_MODEL", "gpt-4o-mini-tts")
-OPENAI_STT_MODEL = os.getenv("OPENAI_STT_MODEL", "whisper-1")
-OPENAI_VOICE_INSTRUCTIONS = os.getenv("OPENAI_VOICE_INSTRUCTIONS", "")
-
-# STT language (applies to both providers; empty = auto-detect)
-STT_LANGUAGE = os.getenv("STT_LANGUAGE", "")
+# Config — loaded from config.py (single source of truth for all env vars)
+import config as _cfg
+TELEGRAM_BOT_TOKEN = _cfg.TELEGRAM_BOT_TOKEN
+ELEVENLABS_API_KEY = _cfg.ELEVENLABS_API_KEY
+ALLOWED_CHAT_ID = _cfg.ALLOWED_CHAT_ID
+ADMIN_USER_IDS = _cfg.ADMIN_USER_IDS
+TOPIC_ID = _cfg.TOPIC_ID
+CLAUDE_WORKING_DIR = _cfg.CLAUDE_WORKING_DIR
+SANDBOX_DIR = _cfg.SANDBOX_DIR
+MAX_VOICE_CHARS = _cfg.MAX_VOICE_CHARS
+CLAUDE_TIMEOUT = _cfg.CLAUDE_TIMEOUT
+PERSONA_NAME = _cfg.PERSONA_NAME
+SYSTEM_PROMPT_FILE = _cfg.SYSTEM_PROMPT_FILE
+ELEVENLABS_VOICE_ID = _cfg.ELEVENLABS_VOICE_ID
+CLAUDE_SETTINGS_FILE = _cfg.CLAUDE_SETTINGS_FILE
+TTS_PROVIDER = _cfg.TTS_PROVIDER
+STT_PROVIDER = _cfg.STT_PROVIDER
+OPENAI_VOICE_ID = _cfg.OPENAI_VOICE_ID
+OPENAI_TTS_MODEL = _cfg.OPENAI_TTS_MODEL
+OPENAI_STT_MODEL = _cfg.OPENAI_STT_MODEL
+OPENAI_VOICE_INSTRUCTIONS = _cfg.OPENAI_VOICE_INSTRUCTIONS
+STT_LANGUAGE = _cfg.STT_LANGUAGE
 
 # OpenAI client (None if no key configured)
-openai_client = OpenAIClient(api_key=os.getenv("OPENAI_API_KEY")) if os.getenv("OPENAI_API_KEY") else None
+openai_client = OpenAIClient(api_key=_cfg.OPENAI_API_KEY) if _cfg.OPENAI_API_KEY else None
 
 def load_system_prompt() -> str:
     """Load system prompt from file or use default."""
@@ -357,8 +334,8 @@ pending_approvals = {}
 cancel_events: dict[int, asyncio.Event] = {}
 
 # State files for persistence
-STATE_FILE = Path(__file__).parent / "sessions_state.json"
-SETTINGS_FILE = Path(__file__).parent / "user_settings.json"
+STATE_FILE = _cfg.STATE_FILE
+SETTINGS_FILE = _cfg.SETTINGS_FILE
 
 
 def load_state():
@@ -410,7 +387,7 @@ def save_settings():
 
 
 # Credentials file for user-provided API keys
-CREDENTIALS_FILE = Path(__file__).parent / "credentials.json"
+CREDENTIALS_FILE = _cfg.CREDENTIALS_FILE
 
 
 def load_credentials() -> dict:
