@@ -696,6 +696,28 @@ def format_tool_call(tool_name: str, tool_input: dict) -> str:
     return f"Tool: {tool_name}\n```\n{input_str}\n```"
 
 
+def build_claude_options(system_prompt: str, mode: str, can_use_tool=None) -> ClaudeAgentOptions:
+    """Build ClaudeAgentOptions from mode and system prompt. Always includes CLAUDE_SETTINGS_FILE."""
+    if mode == "approve":
+        options = ClaudeAgentOptions(
+            system_prompt=system_prompt,
+            cwd=SANDBOX_DIR,
+            can_use_tool=can_use_tool,
+            permission_mode="default",
+            add_dirs=[CLAUDE_WORKING_DIR],
+        )
+    else:
+        options = ClaudeAgentOptions(
+            system_prompt=system_prompt,
+            allowed_tools=["Read", "Grep", "Glob", "WebSearch", "WebFetch", "Task", "Bash", "Edit", "Write", "Skill", "RemoteTrigger"],
+            cwd=SANDBOX_DIR,
+            add_dirs=[CLAUDE_WORKING_DIR],
+        )
+    if CLAUDE_SETTINGS_FILE:
+        options.settings = CLAUDE_SETTINGS_FILE
+    return options
+
+
 async def call_claude(
     prompt: str,
     session_id: str = None,
@@ -802,30 +824,8 @@ async def call_claude(
             return PermissionResultDeny(message="User rejected tool")
 
     # Build SDK options
-    # In approve mode: don't pre-allow tools - let can_use_tool callback handle each one
-    # In go_all mode: pre-allow all tools for no prompts
-    if mode == "approve":
-        logger.debug(f">>> APPROVE MODE: Setting up can_use_tool callback")
-        options = ClaudeAgentOptions(
-            system_prompt=dynamic_persona,
-            cwd=SANDBOX_DIR,
-            can_use_tool=can_use_tool,
-            permission_mode="default",
-            add_dirs=[CLAUDE_WORKING_DIR],
-        )
-        if CLAUDE_SETTINGS_FILE:
-            options.settings = CLAUDE_SETTINGS_FILE
-        logger.debug(f">>> Options: can_use_tool={options.can_use_tool is not None}, permission_mode={options.permission_mode}")
-    else:
-        logger.debug(f">>> GO_ALL MODE: Pre-allowing all tools")
-        options = ClaudeAgentOptions(
-            system_prompt=dynamic_persona,
-            allowed_tools=["Read", "Grep", "Glob", "WebSearch", "WebFetch", "Task", "Bash", "Edit", "Write", "Skill", "RemoteTrigger"],
-            cwd=SANDBOX_DIR,
-            add_dirs=[CLAUDE_WORKING_DIR],
-        )
-        if CLAUDE_SETTINGS_FILE:
-            options.settings = CLAUDE_SETTINGS_FILE
+    options = build_claude_options(dynamic_persona, mode, can_use_tool)
+    logger.debug(f">>> Options built: mode={mode}, settings={bool(CLAUDE_SETTINGS_FILE)}, can_use_tool={options.can_use_tool is not None}")
 
     # Handle session continuation
     if continue_last:

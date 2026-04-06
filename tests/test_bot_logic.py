@@ -745,3 +745,29 @@ class TestTTSFallback:
     def test_format_tts_fallback_mentions_voice(self):
         msg = bot.format_tts_fallback("Test.")
         assert "Voice" in msg or "voice" in msg
+
+
+class TestBuildClaudeOptions:
+    def test_go_all_mode_has_allowed_tools(self):
+        options = bot.build_claude_options("test prompt", "go_all")
+        assert options.allowed_tools is not None
+        assert "Bash" in options.allowed_tools
+
+    def test_approve_mode_has_no_allowed_tools(self):
+        options = bot.build_claude_options("test prompt", "approve")
+        assert not options.allowed_tools
+
+    def test_approve_mode_has_can_use_tool(self):
+        fn = lambda name, inp: None
+        options = bot.build_claude_options("test prompt", "approve", can_use_tool=fn)
+        assert options.can_use_tool is fn
+
+    def test_settings_file_attached_when_configured(self, monkeypatch):
+        monkeypatch.setattr(bot, "CLAUDE_SETTINGS_FILE", "/fake/settings.json")
+        options = bot.build_claude_options("test", "go_all")
+        assert options.settings == "/fake/settings.json"
+
+    def test_no_settings_file_when_not_configured(self, monkeypatch):
+        monkeypatch.setattr(bot, "CLAUDE_SETTINGS_FILE", "")
+        options = bot.build_claude_options("test", "go_all")
+        assert not getattr(options, "settings", None)
