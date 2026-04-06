@@ -1013,6 +1013,88 @@ async def run_remote_trigger_toggle(trigger_id: str, enable: bool) -> bool:
         return False
 
 
+def build_automations_list(triggers: list[dict]) -> tuple[str, InlineKeyboardMarkup]:
+    """Build list view: text summary + inline keyboard."""
+    if not triggers:
+        text = "🤖 Automacje\n\nNie masz jeszcze żadnych automacji."
+        keyboard = [[InlineKeyboardButton("+ Stwórz pierwszą automację", callback_data="auto_new")]]
+        return text, InlineKeyboardMarkup(keyboard)
+
+    active = sum(1 for t in triggers if t.get("enabled", True))
+    names = "\n".join(
+        f"{'●' if t.get('enabled', True) else '○'} {t['name']}" for t in triggers
+    )
+    text = f"🤖 Twoje automacje ({len(triggers)}) · {active} aktywnych\n\n{names}"
+
+    keyboard = []
+    for t in triggers:
+        tid = t["id"]
+        name = t["name"]
+        enabled = t.get("enabled", True)
+        status = "●" if enabled else "○"
+        toggle_label = "⏸" if enabled else "▶"
+        toggle_cb = f"auto_toggle_off_{tid}" if enabled else f"auto_toggle_on_{tid}"
+        row = [
+            InlineKeyboardButton(f"{status} {name}", callback_data=f"auto_card_{tid}"),
+            InlineKeyboardButton("▶", callback_data=f"auto_run_{tid}"),
+            InlineKeyboardButton(toggle_label, callback_data=toggle_cb),
+        ]
+        keyboard.append(row)
+
+    keyboard.append([
+        InlineKeyboardButton("+ Nowa automacja", callback_data="auto_new"),
+        InlineKeyboardButton("🔄", callback_data="auto_refresh"),
+    ])
+    return text, InlineKeyboardMarkup(keyboard)
+
+
+def build_automation_card(trigger: dict, style: str = "full") -> tuple[str, InlineKeyboardMarkup]:
+    """Build card view for a single trigger."""
+    tid = trigger["id"]
+    name = trigger["name"]
+    enabled = trigger.get("enabled", True)
+    cron = trigger.get("cron_expression", "")
+    schedule_human = cron_to_human(cron)
+    status_icon = "●" if enabled else "○"
+    status_text = "Aktywna" if enabled else "Wstrzymana"
+    toggle_label = "⏸ Pause" if enabled else "▶ Resume"
+    toggle_cb = f"auto_toggle_off_{tid}" if enabled else f"auto_toggle_on_{tid}"
+
+    if style == "compact":
+        text = (
+            f"🤖 {name}\n"
+            f"{status_icon} {status_text} · {schedule_human}"
+        )
+        keyboard = [
+            [
+                InlineKeyboardButton("▶ Run now", callback_data=f"auto_run_{tid}"),
+                InlineKeyboardButton(toggle_label, callback_data=toggle_cb),
+                InlineKeyboardButton("✎ Edit", callback_data=f"auto_edit_{tid}"),
+                InlineKeyboardButton("✕", url="https://claude.ai/code/scheduled"),
+            ],
+            [InlineKeyboardButton("← Wróć", callback_data="auto_list")],
+        ]
+    else:  # full
+        text = (
+            f"🤖 {name}\n\n"
+            f"HARMONOGRAM\n{schedule_human}\n\n"
+            f"STATUS\n{status_icon} {status_text}"
+        )
+        keyboard = [
+            [
+                InlineKeyboardButton("▶ Run now", callback_data=f"auto_run_{tid}"),
+                InlineKeyboardButton(toggle_label, callback_data=toggle_cb),
+            ],
+            [
+                InlineKeyboardButton("✎ Edit prompt", callback_data=f"auto_edit_{tid}"),
+                InlineKeyboardButton("✕ Usuń →", url="https://claude.ai/code/scheduled"),
+            ],
+            [InlineKeyboardButton("← Wróć do listy", callback_data="auto_list")],
+        ]
+
+    return text, InlineKeyboardMarkup(keyboard)
+
+
 # ============ Command Handlers ============
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
