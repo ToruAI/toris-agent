@@ -4,6 +4,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import pytest
+import automations
 from automations import cron_to_human, build_automations_list, build_automation_card
 
 
@@ -55,6 +56,16 @@ class TestBuildAutomationsList:
         # 2 trigger rows + 1 footer row
         assert len(markup.inline_keyboard) == 3
 
+    def test_keyboard_contains_trigger_ids(self):
+        triggers = [
+            {"id": "trig_1", "name": "A", "enabled": True},
+            {"id": "trig_2", "name": "B", "enabled": False},
+        ]
+        _, markup = build_automations_list(triggers)
+        all_callbacks = [b.callback_data for row in markup.inline_keyboard for b in row if b.callback_data]
+        assert any("trig_1" in cb for cb in all_callbacks)
+        assert any("trig_2" in cb for cb in all_callbacks)
+
 
 class TestBuildAutomationCard:
     def test_full_style_contains_schedule(self):
@@ -80,3 +91,57 @@ class TestBuildAutomationCard:
         _, markup = build_automation_card(trigger)
         buttons = [b.text for row in markup.inline_keyboard for b in row]
         assert any("Pause" in b for b in buttons)
+
+
+class TestRunRemoteTrigger:
+    def test_list_returns_triggers(self):
+        import asyncio
+        from unittest.mock import patch, MagicMock
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = '{"result": "[{\\"id\\": \\"abc\\", \\"name\\": \\"Test\\", \\"cron_expression\\": \\"0 9 * * *\\", \\"enabled\\": true}]"}'
+        with patch("automations.subprocess.run", return_value=mock_result):
+            triggers = asyncio.run(automations.run_remote_trigger_list())
+        assert len(triggers) == 1
+        assert triggers[0]["name"] == "Test"
+
+    def test_list_returns_empty_on_error(self):
+        import asyncio
+        from unittest.mock import patch, MagicMock
+        mock_result = MagicMock()
+        mock_result.returncode = 1
+        mock_result.stderr = "error"
+        with patch("automations.subprocess.run", return_value=mock_result):
+            triggers = asyncio.run(automations.run_remote_trigger_list())
+        assert triggers == []
+
+    def test_run_trigger_returns_true_on_success(self):
+        import asyncio
+        from unittest.mock import patch, MagicMock
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        with patch("automations.subprocess.run", return_value=mock_result):
+            result = asyncio.run(automations.run_remote_trigger_run("abc123"))
+        assert result is True
+
+    def test_run_trigger_returns_false_on_error(self):
+        import asyncio
+        from unittest.mock import patch, MagicMock
+        mock_result = MagicMock()
+        mock_result.returncode = 1
+        with patch("automations.subprocess.run", return_value=mock_result):
+            result = asyncio.run(automations.run_remote_trigger_run("abc123"))
+        assert result is False
+
+    def test_toggle_trigger_command_contains_remote_trigger(self):
+        import asyncio
+        from unittest.mock import patch, MagicMock
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        captured_cmd = []
+        def capture(cmd, **kwargs):
+            captured_cmd.extend(cmd)
+            return mock_result
+        with patch("automations.subprocess.run", side_effect=capture):
+            asyncio.run(automations.run_remote_trigger_toggle("abc123", True))
+        assert "RemoteTrigger" in " ".join(captured_cmd)
