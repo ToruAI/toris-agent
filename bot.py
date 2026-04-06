@@ -809,7 +809,7 @@ async def call_claude(
         logger.debug(f">>> GO_ALL MODE: Pre-allowing all tools")
         options = ClaudeAgentOptions(
             system_prompt=dynamic_persona,
-            allowed_tools=["Read", "Grep", "Glob", "WebSearch", "WebFetch", "Task", "Bash", "Edit", "Write", "Skill"],
+            allowed_tools=["Read", "Grep", "Glob", "WebSearch", "WebFetch", "Task", "Bash", "Edit", "Write", "Skill", "RemoteTrigger"],
             cwd=SANDBOX_DIR,
             add_dirs=[CLAUDE_WORKING_DIR],
         )
@@ -925,6 +925,31 @@ async def typing_loop(update: Update, context: ContextTypes.DEFAULT_TYPE, stop_e
             await asyncio.wait_for(stop_event.wait(), timeout=4.0)
         except asyncio.TimeoutError:
             pass
+
+
+# ============ Automations Helpers ============
+
+def cron_to_human(expr: str) -> str:
+    """Convert 5-field cron expression to Polish human-readable string."""
+    parts = expr.split()
+    if len(parts) != 5:
+        return expr
+    minute, hour, dom, month, dow = parts
+    if dom != "*" or month != "*":
+        return expr
+    hm = f"{int(hour):02d}:{int(minute):02d}" if hour != "*" and minute.isdigit() and hour.isdigit() else f"{hour}:{minute}"
+    if hour == "*" and minute == "0":
+        return "Co godzinę"
+    if hour == "*":
+        return expr
+    if dow == "*":
+        return f"Codziennie {hm}"
+    if dow == "1-5":
+        return f"Pn-Pt {hm}"
+    day_names = {"0": "Nd", "1": "Pn", "2": "Wt", "3": "Śr", "4": "Cz", "5": "Pt", "6": "Sb", "7": "Nd"}
+    if dow in day_names:
+        return f"{day_names[dow]} {hm}"
+    return expr
 
 
 # ============ Command Handlers ============
