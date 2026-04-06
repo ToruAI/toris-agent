@@ -689,15 +689,16 @@ async def finalize_response(update: Update, processing_msg, response: str):
     await send_long_message(update, processing_msg, response)
 
 
-def load_megg_context() -> str:
-    """Load megg context like the hook does."""
+async def load_megg_context() -> str:
+    """Load megg context like the hook does. Runs subprocess in thread — non-blocking."""
     try:
-        result = subprocess.run(
+        result = await asyncio.to_thread(
+            subprocess.run,
             ["megg", "context"],
             capture_output=True,
             text=True,
             timeout=10,
-            cwd=CLAUDE_WORKING_DIR
+            cwd=CLAUDE_WORKING_DIR,
         )
         if result.returncode == 0:
             logger.debug(f"Loaded megg context: {len(result.stdout)} chars")
@@ -768,7 +769,7 @@ async def call_claude(
     # Load megg context for new sessions
     full_prompt = prompt
     if include_megg and not continue_last and not session_id:
-        megg_ctx = load_megg_context()
+        megg_ctx = await load_megg_context()
         if megg_ctx:
             full_prompt = f"<context>\n{megg_ctx}\n</context>\n\n{prompt}"
             logger.debug("Prepended megg context to prompt")
@@ -1370,12 +1371,13 @@ async def cmd_health(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Check Claude
     try:
-        result = subprocess.run(
+        result = await asyncio.to_thread(
+            subprocess.run,
             ["claude", "-p", "Say OK", "--output-format", "json"],
             capture_output=True,
             text=True,
             timeout=30,
-            cwd=CLAUDE_WORKING_DIR
+            cwd=CLAUDE_WORKING_DIR,
         )
         if result.returncode == 0:
             status.append("Claude Code: OK")
