@@ -1388,13 +1388,16 @@ async def cmd_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     mode = settings.get("mode", "go_all")
     mode_display = "Go All" if mode == "go_all" else "Approve"
     watch_mode_val = settings.get("watch_mode", "off").upper()
+    card_style = settings.get("automation_card_style", "full")
+    card_style_display = "Pełna" if card_style == "full" else "Kompakt"
 
     message = (
         f"Settings:\n\n"
         f"Mode: {mode_display}\n"
         f"Watch: {watch_mode_val}\n"
         f"Audio: {audio_status}\n"
-        f"Voice Speed: {speed}x"
+        f"Voice Speed: {speed}x\n"
+        f"Auto karta: {card_style_display}"
     )
 
     # Build inline keyboard
@@ -1411,6 +1414,7 @@ async def cmd_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
             InlineKeyboardButton("1.1x", callback_data="setting_speed_1.1"),
             InlineKeyboardButton("1.2x", callback_data="setting_speed_1.2"),
         ],
+        [InlineKeyboardButton(f"Auto karta: {card_style_display}", callback_data="setting_card_style_toggle")],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
@@ -1762,14 +1766,22 @@ async def handle_settings_callback(update: Update, context: ContextTypes.DEFAULT
         save_settings()
         logger.debug(f"Speed set to: {speed}")
 
+    elif callback_data == "setting_card_style_toggle":
+        current = settings.get("automation_card_style", "full")
+        settings["automation_card_style"] = "compact" if current == "full" else "full"
+        save_settings()
+        logger.debug(f"Card style toggled to: {settings['automation_card_style']}")
+
     # Build updated settings menu
     audio_status = "ON" if settings["audio_enabled"] else "OFF"
     speed = settings["voice_speed"]
     mode = settings.get("mode", "go_all")
     mode_display = "Go All" if mode == "go_all" else "Approve"
     watch_mode_val = settings.get("watch_mode", "off").upper()
+    card_style = settings.get("automation_card_style", "full")
+    card_style_display = "Pełna" if card_style == "full" else "Kompakt"
 
-    message = f"Settings:\n\nMode: {mode_display}\nWatch: {watch_mode_val}\nAudio: {audio_status}\nVoice Speed: {speed}x"
+    message = f"Settings:\n\nMode: {mode_display}\nWatch: {watch_mode_val}\nAudio: {audio_status}\nVoice Speed: {speed}x\nAuto karta: {card_style_display}"
 
     keyboard = [
         [
@@ -1784,6 +1796,7 @@ async def handle_settings_callback(update: Update, context: ContextTypes.DEFAULT
             InlineKeyboardButton("1.1x", callback_data="setting_speed_1.1"),
             InlineKeyboardButton("1.2x", callback_data="setting_speed_1.2"),
         ],
+        [InlineKeyboardButton(f"Auto karta: {card_style_display}", callback_data="setting_card_style_toggle")],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
