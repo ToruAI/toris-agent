@@ -34,6 +34,7 @@ from automations import (
     build_automations_list,
     build_automation_card,
 )
+import shared_state as _shared
 
 load_dotenv()
 
@@ -283,7 +284,6 @@ def check_rate_limit(user_id: int) -> tuple[bool, str]:
     return True, ""
 
 
-from shared_state import pending_approvals, cancel_events
 
 # State files for persistence
 STATE_FILE = _cfg.STATE_FILE
@@ -632,7 +632,7 @@ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     user_id = update.effective_user.id
-    event = cancel_events.get(user_id)
+    event = _shared.cancel_events.get(user_id)
     if event is not None and not event.is_set():
         event.set()
         await update.message.reply_text("Cancelling...")
@@ -1310,17 +1310,17 @@ async def handle_approval_callback(update: Update, context: ContextTypes.DEFAULT
 
     if callback_data.startswith("approve_"):
         approval_id = callback_data.replace("approve_", "")
-        logger.debug(f">>> Looking for approval_id: {approval_id} in {list(pending_approvals.keys())}")
-        if approval_id in pending_approvals:
+        logger.debug(f">>> Looking for approval_id: {approval_id} in {list(_shared.pending_approvals.keys())}")
+        if approval_id in _shared.pending_approvals:
             # Verify that the user clicking is the one who requested
-            if update.effective_user.id != pending_approvals[approval_id].get("user_id"):
+            if update.effective_user.id != _shared.pending_approvals[approval_id].get("user_id"):
                 await query.answer("Only the requester can approve this")
                 return
 
-            tool_name = pending_approvals[approval_id]["tool_name"]
-            pending_approvals[approval_id]["approved"] = True
+            tool_name = _shared.pending_approvals[approval_id]["tool_name"]
+            _shared.pending_approvals[approval_id]["approved"] = True
             logger.debug(f">>> Setting event for {approval_id}")
-            pending_approvals[approval_id]["event"].set()
+            _shared.pending_approvals[approval_id]["event"].set()
             logger.debug(f">>> Event set, updating message")
             await query.edit_message_text(f"✓ Approved: {tool_name}")
         else:
@@ -1329,17 +1329,17 @@ async def handle_approval_callback(update: Update, context: ContextTypes.DEFAULT
 
     elif callback_data.startswith("reject_"):
         approval_id = callback_data.replace("reject_", "")
-        logger.debug(f">>> Looking for approval_id: {approval_id} in {list(pending_approvals.keys())}")
-        if approval_id in pending_approvals:
+        logger.debug(f">>> Looking for approval_id: {approval_id} in {list(_shared.pending_approvals.keys())}")
+        if approval_id in _shared.pending_approvals:
             # Verify that the user clicking is the one who requested
-            if update.effective_user.id != pending_approvals[approval_id].get("user_id"):
+            if update.effective_user.id != _shared.pending_approvals[approval_id].get("user_id"):
                 await query.answer("Only the requester can reject this")
                 return
 
-            tool_name = pending_approvals[approval_id]["tool_name"]
-            pending_approvals[approval_id]["approved"] = False
+            tool_name = _shared.pending_approvals[approval_id]["tool_name"]
+            _shared.pending_approvals[approval_id]["approved"] = False
             logger.debug(f">>> Setting event for {approval_id} (reject)")
-            pending_approvals[approval_id]["event"].set()
+            _shared.pending_approvals[approval_id]["event"].set()
             logger.debug(f">>> Event set, updating message")
             await query.edit_message_text(f"✗ Rejected: {tool_name}")
         else:
