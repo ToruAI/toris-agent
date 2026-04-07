@@ -23,6 +23,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import bot
 import auth
 import config
+from handlers.session import parse_session_name, format_sessions_list
+from handlers.messages import error_message
 
 
 # ─────────────────────────────────────────────
@@ -186,8 +188,8 @@ class TestCheckClaudeAuth:
 
 class TestMaxVoiceChars:
     def test_max_voice_chars_is_positive_int(self):
-        assert isinstance(bot.MAX_VOICE_CHARS, int)
-        assert bot.MAX_VOICE_CHARS > 0
+        assert isinstance(config.MAX_VOICE_CHARS, int)
+        assert config.MAX_VOICE_CHARS > 0
 
     def test_truncation_logic(self):
         # Test the truncation logic directly (as used in handle_voice/handle_text)
@@ -696,15 +698,15 @@ class TestBuildClaudeOptions:
 
 class TestClaudeTimeout:
     def test_claude_timeout_default_is_int(self):
-        assert isinstance(bot.CLAUDE_TIMEOUT, int)
-        assert bot.CLAUDE_TIMEOUT > 0
+        assert isinstance(config.CLAUDE_TIMEOUT, int)
+        assert config.CLAUDE_TIMEOUT > 0
 
     def test_claude_timeout_from_env(self, monkeypatch):
         monkeypatch.setenv("CLAUDE_TIMEOUT", "120")
         import importlib
         importlib.reload(config)
         importlib.reload(bot)
-        assert bot.CLAUDE_TIMEOUT == 120
+        assert config.CLAUDE_TIMEOUT == 120
 
 
 class TestWorkingIndicator:
@@ -768,26 +770,26 @@ class TestWorkingIndicator:
 
 class TestSessionNaming:
     def test_parse_session_name_empty_args(self):
-        assert bot.parse_session_name([]) is None
+        assert parse_session_name([]) is None
 
     def test_parse_session_name_single_word(self):
-        assert bot.parse_session_name(["analysis"]) == "analysis"
+        assert parse_session_name(["analysis"]) == "analysis"
 
     def test_parse_session_name_multiple_words(self):
-        assert bot.parse_session_name(["my", "project"]) == "my project"
+        assert parse_session_name(["my", "project"]) == "my project"
 
     def test_format_sessions_list_empty(self):
-        assert bot.format_sessions_list([]) == "No sessions yet."
+        assert format_sessions_list([]) == "No sessions yet."
 
     def test_format_sessions_list_shows_name(self):
         sessions = [{"id": "abc123de", "name": "project analysis"}]
-        text = bot.format_sessions_list(sessions)
+        text = format_sessions_list(sessions)
         assert "project analysis" in text
         assert "abc123d" in text
 
     def test_format_sessions_list_unnamed_shows_placeholder(self):
         sessions = [{"id": "def456gh", "name": None}]
-        text = bot.format_sessions_list(sessions)
+        text = format_sessions_list(sessions)
         assert "(unnamed)" in text
         assert "def456g" in text
 
@@ -796,38 +798,38 @@ class TestSessionNaming:
             {"id": "abc123de", "name": "project analysis"},
             {"id": "def456gh", "name": None},
         ]
-        text = bot.format_sessions_list(sessions)
+        text = format_sessions_list(sessions)
         assert "project analysis" in text
         assert "(unnamed)" in text
 
 
 class TestErrorMessages:
     def test_rate_limit_error(self):
-        msg = bot.error_message("Claude call", Exception("rate limit exceeded 429"))
+        msg = error_message("Claude call", Exception("rate limit exceeded 429"))
         assert "Rate limit" in msg
         assert "❌" in msg
 
     def test_timeout_error(self):
-        msg = bot.error_message("STT", Exception("request timeout"))
+        msg = error_message("STT", Exception("request timeout"))
         assert "Timed out" in msg
         assert "❌" in msg
 
     def test_auth_error(self):
-        msg = bot.error_message("TTS", Exception("401 Unauthorized"))
+        msg = error_message("TTS", Exception("401 Unauthorized"))
         assert "Authentication" in msg
 
     def test_network_error(self):
-        msg = bot.error_message("Voice", Exception("network connection refused"))
+        msg = error_message("Voice", Exception("network connection refused"))
         assert "Network" in msg
 
     def test_generic_error_includes_context(self):
-        msg = bot.error_message("TTS", Exception("Something broke"))
+        msg = error_message("TTS", Exception("Something broke"))
         assert "TTS" in msg
         assert "❌" in msg
 
     def test_generic_error_truncated(self):
         long_exc = Exception("x" * 300)
-        msg = bot.error_message("ctx", long_exc)
+        msg = error_message("ctx", long_exc)
         assert len(msg) < 200
 
 

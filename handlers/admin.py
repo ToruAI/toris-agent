@@ -379,9 +379,6 @@ async def handle_approval_callback(update: Update, context: ContextTypes.DEFAULT
 
     logger.debug(f">>> APPROVAL CALLBACK received: {callback_data}")
 
-    # Answer the callback immediately to prevent Telegram timeout
-    await query.answer()
-
     if callback_data.startswith("approve_"):
         approval_id = callback_data.replace("approve_", "")
         logger.debug(f">>> Looking for approval_id: {approval_id} in {list(_shared.pending_approvals.keys())}")
@@ -391,6 +388,7 @@ async def handle_approval_callback(update: Update, context: ContextTypes.DEFAULT
                 await query.answer("Only the requester can approve this")
                 return
 
+            await query.answer()
             tool_name = _shared.pending_approvals[approval_id]["tool_name"]
             _shared.pending_approvals[approval_id]["approved"] = True
             logger.debug(f">>> Setting event for {approval_id}")
@@ -399,6 +397,7 @@ async def handle_approval_callback(update: Update, context: ContextTypes.DEFAULT
             await query.edit_message_text(f"✓ Approved: {tool_name}")
         else:
             logger.debug(f">>> Approval {approval_id} not found (expired)")
+            await query.answer()
             await query.edit_message_text("Approval expired")
 
     elif callback_data.startswith("reject_"):
@@ -410,6 +409,7 @@ async def handle_approval_callback(update: Update, context: ContextTypes.DEFAULT
                 await query.answer("Only the requester can reject this")
                 return
 
+            await query.answer()
             tool_name = _shared.pending_approvals[approval_id]["tool_name"]
             _shared.pending_approvals[approval_id]["approved"] = False
             logger.debug(f">>> Setting event for {approval_id} (reject)")
@@ -418,4 +418,5 @@ async def handle_approval_callback(update: Update, context: ContextTypes.DEFAULT
             await query.edit_message_text(f"✗ Rejected: {tool_name}")
         else:
             logger.debug(f">>> Approval {approval_id} not found (expired)")
+            await query.answer()
             await query.edit_message_text("Approval expired")

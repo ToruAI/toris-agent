@@ -1,8 +1,8 @@
 """
 Thread-safe user session and settings state management.
 
-Wraps the global dicts from bot.py with per-user asyncio.Lock and atomic file persistence.
-Use get_manager() to access the singleton after bot.py initializes it.
+Owns the canonical user-session and settings state. Initialized once in main() via
+StateManager.init(). Access the singleton with get_manager().
 """
 import asyncio
 import json

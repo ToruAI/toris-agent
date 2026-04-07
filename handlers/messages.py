@@ -239,7 +239,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Typing indicator first — signals immediately that bot is alive
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
     typing_stop = asyncio.Event()
-    asyncio.ensure_future(typing_loop(update, context, typing_stop))
+    asyncio.create_task(typing_loop(update, context, typing_stop))
     processing_msg = await update.message.reply_text("Processing voice message...")
     logger.debug("Sent processing acknowledgement")
 
@@ -339,7 +339,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
     typing_stop = asyncio.Event()
-    asyncio.ensure_future(typing_loop(update, context, typing_stop))
+    asyncio.create_task(typing_loop(update, context, typing_stop))
     processing_msg = await update.message.reply_text("Toris thinking...")
 
     # Prepend compact summary if pending from /compact
@@ -414,7 +414,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
     typing_stop = asyncio.Event()
-    asyncio.ensure_future(typing_loop(update, context, typing_stop))
+    asyncio.create_task(typing_loop(update, context, typing_stop))
     processing_msg = await update.message.reply_text("Processing photo...")
 
     try:

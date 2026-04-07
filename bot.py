@@ -10,6 +10,7 @@ import shutil
 import json
 import asyncio
 import logging
+import time
 from datetime import datetime
 from pathlib import Path
 from dotenv import load_dotenv
@@ -58,7 +59,6 @@ def check_claude_auth() -> tuple[bool, str]:
     credentials_path = Path.home() / ".claude" / ".credentials.json"
     if credentials_path.exists():
         try:
-            import time
             creds = json.loads(credentials_path.read_text())
             oauth = creds.get("claudeAiOauth", {})
             if oauth.get("accessToken"):
@@ -134,7 +134,6 @@ from auth import should_handle_message, _is_authorized, _is_admin, check_rate_li
 from handlers.session import (
     cmd_start, cmd_new, cmd_cancel, cmd_compact, cmd_continue,
     cmd_sessions, cmd_switch, cmd_status,
-    parse_session_name, format_sessions_list,
 )
 from handlers.admin import (
     cmd_setup, cmd_claude_token, cmd_elevenlabs_key, cmd_openai_key,
@@ -143,7 +142,6 @@ from handlers.admin import (
 )
 from handlers.messages import (
     handle_voice, handle_text, handle_photo, handle_automations_callback,
-    send_long_message, finalize_response, error_message,
 )
 import voice_service
 from voice_service import (
@@ -164,12 +162,9 @@ from claude_service import (
 TELEGRAM_BOT_TOKEN = _cfg.TELEGRAM_BOT_TOKEN
 ELEVENLABS_API_KEY = _cfg.ELEVENLABS_API_KEY
 ALLOWED_CHAT_ID = _cfg.ALLOWED_CHAT_ID
-ADMIN_USER_IDS = _cfg.ADMIN_USER_IDS
 TOPIC_ID = _cfg.TOPIC_ID
 CLAUDE_WORKING_DIR = _cfg.CLAUDE_WORKING_DIR
 SANDBOX_DIR = _cfg.SANDBOX_DIR
-MAX_VOICE_CHARS = _cfg.MAX_VOICE_CHARS
-CLAUDE_TIMEOUT = _cfg.CLAUDE_TIMEOUT
 PERSONA_NAME = _cfg.PERSONA_NAME
 SYSTEM_PROMPT_FILE = _cfg.SYSTEM_PROMPT_FILE
 ELEVENLABS_VOICE_ID = _cfg.ELEVENLABS_VOICE_ID
@@ -179,8 +174,6 @@ STT_PROVIDER = _cfg.STT_PROVIDER
 OPENAI_VOICE_ID = _cfg.OPENAI_VOICE_ID
 OPENAI_TTS_MODEL = _cfg.OPENAI_TTS_MODEL
 OPENAI_STT_MODEL = _cfg.OPENAI_STT_MODEL
-OPENAI_VOICE_INSTRUCTIONS = _cfg.OPENAI_VOICE_INSTRUCTIONS
-STT_LANGUAGE = _cfg.STT_LANGUAGE
 
 # OpenAI client (None if no key configured)
 openai_client = OpenAIClient(api_key=_cfg.OPENAI_API_KEY) if _cfg.OPENAI_API_KEY else None
