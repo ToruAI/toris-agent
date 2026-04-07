@@ -372,8 +372,8 @@ async def cmd_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lines.append(f"`{sid[:8]}`{name_part}")
         if excerpt:
             lines.append(f"_{excerpt}_\n")
-        label = name if name else sid[:8]
-        buttons.append([InlineKeyboardButton(f"Switch → {label}", callback_data=f"sess_switch_{sid}")])
+        label = name or (excerpt[:45].rstrip() + "…" if len(excerpt) > 45 else excerpt) or sid[:8]
+        buttons.append([InlineKeyboardButton(f"↩ {label}", callback_data=f"sess_switch_{sid}")])
 
     keyboard = InlineKeyboardMarkup(buttons) if buttons else None
     await searching_msg.edit_text("\n".join(lines), parse_mode="Markdown", reply_markup=keyboard)
