@@ -89,7 +89,7 @@ async def finalize_response(update: Update, processing_msg, response: str):
 
 
 async def typing_loop(update: Update, context: ContextTypes.DEFAULT_TYPE, stop_event: asyncio.Event):
-    """Send typing indicator every 4s until stop_event is set (Telegram typing expires after 5s)."""
+    """Send typing indicator every 3s until stop_event is set (Telegram typing expires after 5s)."""
     while not stop_event.is_set():
         try:
             await context.bot.send_chat_action(
@@ -99,7 +99,7 @@ async def typing_loop(update: Update, context: ContextTypes.DEFAULT_TYPE, stop_e
         except Exception:
             pass
         try:
-            await asyncio.wait_for(stop_event.wait(), timeout=4.0)
+            await asyncio.wait_for(stop_event.wait(), timeout=3.0)
         except asyncio.TimeoutError:
             pass
 

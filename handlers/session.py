@@ -223,9 +223,19 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     state = get_manager().get_user_state(user_id)
 
     if state["current_session"]:
+        names = state.get("session_names", {})
+        name = names.get(state["current_session"])
+        name_part = f" — {name}" if name else ""
         await update.message.reply_text(
-            f"Current session: {state['current_session'][:8]}...\n"
-            f"Total sessions: {len(state['sessions'])}"
+            f"Session: `{state['current_session'][:8]}`{name_part}\n"
+            f"Total: {len(state['sessions'])}",
+            parse_mode="Markdown"
         )
+    elif "pending_session_name" in state:
+        name = state["pending_session_name"]
+        if name:
+            await update.message.reply_text(f"New session pending: *{name}* — send a message to start.", parse_mode="Markdown")
+        else:
+            await update.message.reply_text("New session pending — send a message to start.")
     else:
-        await update.message.reply_text("No active session. Send a voice message or /new to start.")
+        await update.message.reply_text("No active session. Use /new to start one.")

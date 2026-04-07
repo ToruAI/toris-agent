@@ -239,6 +239,17 @@ def load_mcp_servers() -> dict:
 
 # ============ Command Handlers ============
 
+async def handle_unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Catch-all for unrecognised commands."""
+    if not should_handle_message(update.message.message_thread_id):
+        return
+    cmd = update.message.text.split()[0]
+    await update.message.reply_text(
+        f"Unknown command: `{cmd}`\n\nType /start to see all available commands.",
+        parse_mode="Markdown"
+    )
+
+
 async def cmd_health(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /health command - check all systems."""
     if not should_handle_message(update.message.message_thread_id):
@@ -248,6 +259,8 @@ async def cmd_health(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     logger.debug(f"HEALTH command from user {update.effective_user.id}, chat {update.effective_chat.id}, topic {update.message.message_thread_id}")
+
+    checking_msg = await update.message.reply_text("🔍 Checking systems...")
 
     status = []
     status.append("=== Health Check ===\n")
@@ -316,7 +329,7 @@ async def cmd_health(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status.append(f"Topic ID: {update.message.message_thread_id or 'None'}")
     status.append(f"User ID: {update.effective_user.id}")
 
-    await update.message.reply_text("\n".join(status))
+    await checking_msg.edit_text("\n".join(status))
 
 
 async def cmd_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -428,6 +441,8 @@ def main():
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+    # Unknown commands — must be last
+    app.add_handler(MessageHandler(filters.COMMAND, handle_unknown_command))
 
     # Ensure sandbox exists at startup
     Path(SANDBOX_DIR).mkdir(parents=True, exist_ok=True)
@@ -443,7 +458,6 @@ def main():
             BotCommand("switch",   "Switch to a session by ID"),
             BotCommand("status",   "Current session info"),
             BotCommand("settings",    "Voice, mode & speed settings"),
-            BotCommand("automations", "Manage scheduled automations"),
             BotCommand("health",   "Check bot & API status"),
             BotCommand("setup",    "Configure API tokens"),
             BotCommand("start",    "Show help"),
@@ -467,4 +481,6 @@ def main():
 
 
 if __name__ == "__main__":
+    # Python 3.14 removed implicit event loop creation in get_event_loop()
+    asyncio.set_event_loop(asyncio.new_event_loop())
     main()
