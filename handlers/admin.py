@@ -8,8 +8,6 @@ Credentials: load/save/apply API keys
 import json
 import logging
 import os
-from pathlib import Path
-
 from elevenlabs.client import ElevenLabs
 from openai import OpenAI as OpenAIClient
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -18,7 +16,7 @@ from telegram.ext import ContextTypes
 import config as _cfg
 import shared_state as _shared
 import voice_service
-from auth import should_handle_message, _is_admin, _is_authorized
+from auth import should_handle_message, _is_admin
 from state_manager import get_manager
 
 logger = logging.getLogger(__name__)
