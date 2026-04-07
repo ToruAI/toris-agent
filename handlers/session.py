@@ -3,8 +3,10 @@ Session command handlers.
 
 Commands: /start /new /cancel /compact /continue /sessions /switch /status /search
 """
+import asyncio
 import json
 import logging
+import subprocess
 from pathlib import Path
 
 from telegram import Update
@@ -280,20 +282,10 @@ async def cmd_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if not context.args:
-        await update.message.reply_text("Usage: /search <keyword>")
+        await update.message.reply_text("Usage: /search <query>")
         return
 
-    raw = " ".join(context.args).lower().strip()
-    # Split into individual keywords; ignore short stop-words
-    _stop = {"a", "an", "the", "is", "in", "of", "to", "i", "w", "na", "do",
-              "z", "ze", "się", "że", "to", "co", "jak", "by", "była", "było",
-              "były", "był", "być", "jaka", "jaki", "nasze", "nasza", "nasz",
-              "która", "który", "które"}
-    keywords = [w.strip("?!.,;:") for w in raw.split() if len(w) > 2 and w not in _stop]
-    if not keywords:
-        await update.message.reply_text("Usage: /search <keyword>")
-        return
-
+    query = " ".join(context.args).strip()
     user_id = update.effective_user.id
     state = get_manager().get_user_state(user_id)
 
@@ -304,35 +296,73 @@ async def cmd_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("No sessions yet.")
         return
 
-    scored = []
-    for sid in sessions:
+    # Build session metadata for Claude (last 30, most recent first)
+    session_data = []
+    for sid in reversed(sessions[-30:]):
         name = names.get(sid) or ""
         first_prompt = _get_session_first_prompt(sid) or ""
-        searchable = (name + " " + first_prompt).lower()
-        hits = sum(1 for kw in keywords if kw in searchable)
-        if hits > 0:
-            excerpt = first_prompt[:120].replace("\n", " ")
-            if len(first_prompt) > 120:
-                excerpt += "..."
-            scored.append((hits, sid, name, excerpt))
+        session_data.append({
+            "id": sid,
+            "name": name,
+            "first_message": first_prompt[:300],
+        })
 
-    # Sort by hit count desc, then preserve recency (stable sort keeps insertion order)
-    scored.sort(key=lambda x: -x[0])
-    matches = [(sid, name, excerpt) for _, sid, name, excerpt in scored[:8]]
+    searching_msg = await update.message.reply_text("🔍 Searching sessions...")
 
-    if not matches:
-        kw_str = ", ".join(keywords)
-        await update.message.reply_text(f"No sessions matching: {kw_str}")
+    prompt = (
+        "You are searching through conversation session records. "
+        "Given the user's query, return the IDs of the most relevant sessions.\n\n"
+        f'Query: "{query}"\n\n'
+        f"Sessions (JSON):\n{json.dumps(session_data, ensure_ascii=False)}\n\n"
+        "Return ONLY a JSON array of session IDs (the full 'id' values), "
+        "most relevant first, up to 5. "
+        'If nothing is relevant return an empty array. Example: ["abc-123", "def-456"]'
+    )
+
+    try:
+        result = await asyncio.to_thread(
+            subprocess.run,
+            ["claude", "-p", prompt, "--output-format", "json"],
+            capture_output=True, text=True, timeout=30,
+            cwd=_cfg.CLAUDE_WORKING_DIR,
+        )
+        if result.returncode != 0:
+            await searching_msg.edit_text(f"Search failed: {result.stderr[:100]}")
+            return
+
+        outer = json.loads(result.stdout)
+        raw_result = outer.get("result", "")
+        # Claude returns the JSON array inside the result string
+        start = raw_result.find("[")
+        end = raw_result.rfind("]") + 1
+        if start == -1 or end == 0:
+            await searching_msg.edit_text("No sessions found.")
+            return
+        matched_ids = json.loads(raw_result[start:end])
+    except Exception as e:
+        logger.error(f"cmd_search error: {e}")
+        await searching_msg.edit_text(f"Search error: {e}")
         return
 
-    kw_str = ", ".join(keywords)
-    lines = [f"Sessions matching *{kw_str}*:\n"]
-    for sid, name, excerpt in matches:
+    if not matched_ids:
+        await searching_msg.edit_text(f"No sessions matching: {query}")
+        return
+
+    # Build id → metadata map for display
+    meta = {s["id"]: s for s in session_data}
+    lines = [f"Sessions matching *{query}*:\n"]
+    for sid in matched_ids:
+        if sid not in meta:
+            continue
         short = sid[:8]
+        name = meta[sid]["name"]
+        excerpt = meta[sid]["first_message"][:120].replace("\n", " ")
+        if len(meta[sid]["first_message"]) > 120:
+            excerpt += "..."
         name_part = f" — {name}" if name else ""
         lines.append(f"`{short}`{name_part}")
         if excerpt:
             lines.append(f"_{excerpt}_")
         lines.append(f"→ /switch {short}\n")
 
-    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+    await searching_msg.edit_text("\n".join(lines), parse_mode="Markdown")
