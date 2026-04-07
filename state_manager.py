@@ -13,6 +13,13 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_USER_SETTINGS: dict = {
+    "audio_enabled": True,
+    "voice_speed": 1.1,
+    "mode": "go_all",
+    "watch_mode": "off",
+}
+
 _instance: "StateManager | None" = None
 
 
@@ -98,11 +105,31 @@ class StateManager:
     # ── User settings ─────────────────────────────────────────────────────────
 
     def get_user_settings(self, user_id: str | int) -> dict:
-        """Return user settings dict, creating empty if missing."""
+        """Return user settings dict with defaults applied and legacy fields migrated."""
         key = str(user_id)
         if key not in self._settings:
-            self._settings[key] = {}
-        return self._settings[key]
+            self._settings[key] = dict(DEFAULT_USER_SETTINGS)
+            return self._settings[key]
+
+        s = self._settings[key]
+
+        # Apply any missing defaults
+        for field, default in DEFAULT_USER_SETTINGS.items():
+            if field not in s:
+                s[field] = default
+
+        # Migrate watch_enabled / show_activity → watch_mode (legacy field names)
+        if "watch_mode" not in s or s.get("watch_enabled") or s.get("show_activity"):
+            if s.pop("watch_enabled", False):
+                s["watch_mode"] = "live"
+            elif s.pop("show_activity", False):
+                s["watch_mode"] = "debug"
+            else:
+                s["watch_mode"] = s.get("watch_mode", "off")
+        s.pop("watch_enabled", None)
+        s.pop("show_activity", None)
+
+        return s
 
     def all_settings(self) -> dict:
         return self._settings

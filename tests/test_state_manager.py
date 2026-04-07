@@ -79,9 +79,10 @@ class TestStateManagerGetters:
         s2 = sm.get_user_state("u1")
         assert s1 is s2
 
-    def test_get_user_settings_creates_empty(self, sm):
+    def test_get_user_settings_creates_defaults(self, sm):
         settings = sm.get_user_settings("new_user")
-        assert settings == {}
+        assert "audio_enabled" in settings
+        assert "mode" in settings
 
     def test_int_and_str_user_id_equivalent(self, sm):
         sm.get_user_state(123)
@@ -121,3 +122,37 @@ class TestStateManagerSingleton:
         state_manager._instance = None
         with pytest.raises(RuntimeError, match="not initialized"):
             state_manager.get_manager()
+
+
+class TestStateManagerUserSettingsDefaults:
+    def test_new_user_gets_defaults(self, sm):
+        s = sm.get_user_settings("new_user")
+        assert s["audio_enabled"] is True
+        assert s["voice_speed"] == 1.1
+        assert s["mode"] == "go_all"
+        assert s["watch_mode"] == "off"
+
+    def test_existing_user_without_mode_gets_default(self, sm):
+        sm._settings["u1"] = {"audio_enabled": False, "voice_speed": 1.0}
+        s = sm.get_user_settings("u1")
+        assert s["mode"] == "go_all"
+        assert s["watch_mode"] == "off"
+
+    def test_migration_watch_enabled_true(self, sm):
+        sm._settings["u1"] = {"watch_enabled": True}
+        s = sm.get_user_settings("u1")
+        assert s["watch_mode"] == "live"
+        assert "watch_enabled" not in s
+
+    def test_migration_show_activity_true(self, sm):
+        sm._settings["u1"] = {"show_activity": True}
+        s = sm.get_user_settings("u1")
+        assert s["watch_mode"] == "debug"
+        assert "show_activity" not in s
+
+    def test_migration_neither_flag_gives_off(self, sm):
+        sm._settings["u1"] = {"watch_enabled": False, "show_activity": False}
+        s = sm.get_user_settings("u1")
+        assert s["watch_mode"] == "off"
+        assert "watch_enabled" not in s
+        assert "show_activity" not in s
