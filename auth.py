@@ -27,7 +27,7 @@ def should_handle_message(message_thread_id: "int | None") -> bool:
     try:
         allowed_topic = int(_cfg.TOPIC_ID)
     except (ValueError, TypeError):
-        logger.debug(f"WARNING: Invalid TOPIC_ID '{_cfg.TOPIC_ID}', handling all messages")
+        logger.warning("Invalid TOPIC_ID %r, handling all messages", _cfg.TOPIC_ID)
         return True
     if message_thread_id is None:
         return False
