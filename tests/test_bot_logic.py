@@ -848,3 +848,14 @@ class TestClaudeServiceImport:
         assert callable(claude_service.build_claude_options)
         assert callable(claude_service.build_dynamic_prompt)
         assert hasattr(claude_service, "WorkingIndicator")
+
+
+class TestSessionHandlersImport:
+    def test_session_helpers_importable_from_handlers(self):
+        from handlers.session import parse_session_name, format_sessions_list
+        assert parse_session_name(["my", "project"]) == "my project"
+        assert parse_session_name([]) is None
+        sessions = [{"id": "abc123de", "name": "test"}]
+        text = format_sessions_list(sessions)
+        assert "abc123d" in text
+        assert "test" in text
