@@ -61,3 +61,24 @@ class TestCheckRateLimit:
         allowed, msg = auth.check_rate_limit(99)
         assert allowed is False
         assert "limit" in msg.lower()
+
+    def test_rate_limit_resets_after_minute(self):
+        """Per-minute counter resets when > 60s have elapsed."""
+        auth._rate_limits["77"] = {
+            "last_message": 0,
+            "minute_count": 9,          # one below the limit
+            "minute_start": time.time() - 61,  # started over a minute ago
+        }
+        # First call: minute has expired → counter resets, message allowed
+        allowed, msg = auth.check_rate_limit(77)
+        assert allowed is True
+        # Counter was reset, so now minute_count == 1
+        assert auth._rate_limits["77"]["minute_count"] == 1
+
+
+class TestShouldHandleMessageInvalidTopicId:
+    def test_invalid_topic_id_warns_and_handles_all(self, monkeypatch):
+        """Non-integer TOPIC_ID logs a warning and accepts all messages."""
+        monkeypatch.setattr(auth, "_cfg", type("C", (), {"TOPIC_ID": "not-a-number"})())
+        assert auth.should_handle_message(42) is True
+        assert auth.should_handle_message(None) is True
