@@ -9,8 +9,8 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 import shared_state as _shared
-from auth import should_handle_message, _is_authorized, check_rate_limit
-from claude_service import call_claude, build_dynamic_prompt
+from auth import should_handle_message, _is_authorized
+from claude_service import call_claude
 from state_manager import get_manager
 
 logger = logging.getLogger(__name__)
