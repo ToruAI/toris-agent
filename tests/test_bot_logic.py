@@ -8,7 +8,6 @@ import os
 import sys
 import time
 import pytest
-import tempfile
 from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
@@ -66,74 +65,6 @@ class TestResolveProvider:
     def teardown_method(self):
         for var in ("TTS_PROVIDER", "STT_PROVIDER", "ELEVENLABS_API_KEY", "OPENAI_API_KEY"):
             os.environ.pop(var, None)
-
-
-# ─────────────────────────────────────────────
-# TestLoadSaveState
-# ─────────────────────────────────────────────
-
-class TestLoadSaveState:
-    def setup_method(self):
-        self.tmp = tempfile.NamedTemporaryFile(suffix=".json", delete=False)
-        self.tmp.close()
-        self.orig_state_file = bot.STATE_FILE
-        bot.STATE_FILE = Path(self.tmp.name)
-        bot.user_sessions = {}
-
-    def teardown_method(self):
-        bot.STATE_FILE = self.orig_state_file
-        Path(self.tmp.name).unlink(missing_ok=True)
-
-    def test_roundtrip(self):
-        bot.user_sessions = {"123": {"current_session": "abc", "sessions": ["abc"]}}
-        bot.save_state()
-        bot.user_sessions = {}
-        bot.load_state()
-        assert bot.user_sessions["123"]["current_session"] == "abc"
-
-    def test_corrupted_json(self):
-        Path(self.tmp.name).write_text("not valid json{{{{")
-        bot.load_state()  # Must NOT raise
-        assert bot.user_sessions == {}
-
-    def test_missing_file(self):
-        Path(self.tmp.name).unlink()
-        bot.load_state()  # Must NOT raise
-        assert bot.user_sessions == {}
-
-    def test_empty_file(self):
-        Path(self.tmp.name).write_text("")
-        bot.load_state()  # Must NOT raise
-        assert bot.user_sessions == {}
-
-
-# ─────────────────────────────────────────────
-# TestLoadSaveSettings
-# ─────────────────────────────────────────────
-
-class TestLoadSaveSettings:
-    def setup_method(self):
-        self.tmp = tempfile.NamedTemporaryFile(suffix=".json", delete=False)
-        self.tmp.close()
-        self.orig_settings_file = bot.SETTINGS_FILE
-        bot.SETTINGS_FILE = Path(self.tmp.name)
-        bot.user_settings = {}
-
-    def teardown_method(self):
-        bot.SETTINGS_FILE = self.orig_settings_file
-        Path(self.tmp.name).unlink(missing_ok=True)
-
-    def test_corrupted_json(self):
-        Path(self.tmp.name).write_text("{bad json")
-        bot.load_settings()  # Must NOT raise
-        assert bot.user_settings == {}
-
-    def test_roundtrip(self):
-        bot.user_settings = {"456": {"mode": "approve", "audio_enabled": False}}
-        bot.save_settings()
-        bot.user_settings = {}
-        bot.load_settings()
-        assert bot.user_settings["456"]["mode"] == "approve"
 
 
 # ─────────────────────────────────────────────
@@ -775,40 +706,6 @@ class TestBuildClaudeOptions:
         options = bot.build_claude_options("test", "go_all")
         assert not getattr(options, "settings", None)
 
-
-class TestStateLocking:
-    def test_get_user_lock_returns_asyncio_lock(self):
-        lock = bot.get_user_lock("user123")
-        import asyncio
-        assert isinstance(lock, asyncio.Lock)
-
-    def test_get_user_lock_same_user_same_lock(self):
-        lock1 = bot.get_user_lock("userA")
-        lock2 = bot.get_user_lock("userA")
-        assert lock1 is lock2
-
-    def test_get_user_lock_different_users_different_locks(self):
-        lock1 = bot.get_user_lock("userX")
-        lock2 = bot.get_user_lock("userY")
-        assert lock1 is not lock2
-
-    def test_save_state_atomic_write(self, tmp_path, monkeypatch):
-        """save_state writes to .tmp then renames — no .tmp left after success."""
-        monkeypatch.setattr(bot, "STATE_FILE", tmp_path / "state.json")
-        bot.user_sessions = {"u1": {"current_session": "abc", "sessions": ["abc"]}}
-        bot.save_state()
-        assert (tmp_path / "state.json").exists()
-        assert not (tmp_path / "state.json.tmp").exists()
-        import json
-        data = json.loads((tmp_path / "state.json").read_text())
-        assert data["u1"]["current_session"] == "abc"
-
-    def test_save_settings_atomic_write(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(bot, "SETTINGS_FILE", tmp_path / "settings.json")
-        bot.user_settings = {"u1": {"audio_enabled": True}}
-        bot.save_settings()
-        assert (tmp_path / "settings.json").exists()
-        assert not (tmp_path / "settings.json.tmp").exists()
 
 
 class TestClaudeTimeout:

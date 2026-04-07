@@ -35,6 +35,7 @@ from automations import (
     build_automation_card,
 )
 import shared_state as _shared
+from state_manager import StateManager, get_manager
 
 load_dotenv()
 
@@ -217,25 +218,6 @@ VOICE_SETTINGS = {
 # ElevenLabs client
 elevenlabs = ElevenLabs(api_key=ELEVENLABS_API_KEY)
 
-# Session state per user
-user_sessions = {}  # {user_id: {"current_session": "session_id", "sessions": []}}
-
-# Per-user asyncio locks — prevent concurrent state corruption with concurrent_updates=True
-_user_locks: dict[str, asyncio.Lock] = {}
-_user_locks_mutex = __import__("threading").Lock()
-
-
-def get_user_lock(user_id: str) -> asyncio.Lock:
-    """Return asyncio.Lock for user_id (creates one if needed). Thread-safe."""
-    with _user_locks_mutex:
-        if user_id not in _user_locks:
-            _user_locks[user_id] = asyncio.Lock()
-        return _user_locks[user_id]
-
-
-# User settings per user
-user_settings = {}  # {user_id: {"audio_enabled": bool, "voice_speed": float, "mode": str, "watch_enabled": bool}}
-
 # Rate limiting
 RATE_LIMIT_SECONDS = 2  # Minimum seconds between messages per user
 RATE_LIMIT_PER_MINUTE = 10  # Max messages per minute per user
@@ -283,59 +265,6 @@ def check_rate_limit(user_id: int) -> tuple[bool, str]:
 
     return True, ""
 
-
-
-# State files for persistence
-STATE_FILE = _cfg.STATE_FILE
-SETTINGS_FILE = _cfg.SETTINGS_FILE
-
-
-def load_state():
-    """Load session state from file."""
-    global user_sessions
-    if STATE_FILE.exists():
-        try:
-            with open(STATE_FILE) as f:
-                user_sessions = json.load(f)
-            logger.debug(f"Loaded state: {len(user_sessions)} users")
-        except (json.JSONDecodeError, IOError) as e:
-            logger.warning(f"Could not load state file, starting fresh: {e}")
-            user_sessions = {}
-
-
-def save_state():
-    """Atomically save session state (write to .tmp, then rename — safe for concurrent handlers)."""
-    tmp = Path(str(STATE_FILE) + ".tmp")
-    try:
-        tmp.write_text(json.dumps(user_sessions, indent=2))
-        tmp.replace(STATE_FILE)
-    except OSError as e:
-        logger.error(f"Failed to save state: {e}")
-        tmp.unlink(missing_ok=True)
-
-
-def load_settings():
-    """Load user settings from file."""
-    global user_settings
-    if SETTINGS_FILE.exists():
-        try:
-            with open(SETTINGS_FILE) as f:
-                user_settings = json.load(f)
-            logger.debug(f"Loaded settings: {len(user_settings)} users")
-        except (json.JSONDecodeError, IOError) as e:
-            logger.warning(f"Could not load settings file, starting fresh: {e}")
-            user_settings = {}
-
-
-def save_settings():
-    """Atomically save user settings (write to .tmp, then rename — safe for concurrent handlers)."""
-    tmp = Path(str(SETTINGS_FILE) + ".tmp")
-    try:
-        tmp.write_text(json.dumps(user_settings, indent=2))
-        tmp.replace(SETTINGS_FILE)
-    except OSError as e:
-        logger.error(f"Failed to save settings: {e}")
-        tmp.unlink(missing_ok=True)
 
 
 # Credentials file for user-provided API keys
@@ -444,41 +373,6 @@ def load_mcp_servers() -> dict:
         return data.get("mcpServers", {})
     except (json.JSONDecodeError, IOError, OSError):
         return {}
-
-
-def get_user_state(user_id: int) -> dict:
-    """Get or create user state."""
-    user_id_str = str(user_id)
-    if user_id_str not in user_sessions:
-        user_sessions[user_id_str] = {"current_session": None, "sessions": []}
-    return user_sessions[user_id_str]
-
-
-def get_user_settings(user_id: int) -> dict:
-    """Get or create user settings with defaults."""
-    user_id_str = str(user_id)
-    if user_id_str not in user_settings:
-        user_settings[user_id_str] = {
-            "audio_enabled": True,
-            "voice_speed": VOICE_SETTINGS["speed"],
-            "mode": "go_all",  # "go_all" or "approve"
-            "watch_mode": "off",  # "off" | "live" | "debug"
-        }
-    else:
-        s = user_settings[user_id_str]
-        if "mode" not in s:
-            s["mode"] = "go_all"
-        # Migrate watch_enabled / show_activity → watch_mode
-        if "watch_mode" not in s:
-            if s.pop("watch_enabled", False):
-                s["watch_mode"] = "live"
-            elif s.pop("show_activity", False):
-                s["watch_mode"] = "debug"
-            else:
-                s["watch_mode"] = "off"
-        s.pop("watch_enabled", None)
-        s.pop("show_activity", None)
-    return user_settings[user_id_str]
 
 
 def error_message(context: str, exc: Exception) -> str:
@@ -609,7 +503,7 @@ async def cmd_new(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     user_id = update.effective_user.id
-    state = get_user_state(user_id)
+    state = get_manager().get_user_state(user_id)
 
     session_name = parse_session_name(context.args or [])
     state["current_session"] = None  # Will be set on first message
@@ -620,7 +514,7 @@ async def cmd_new(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("✅ Starting new session.")
 
-    save_state()
+    get_manager().save_state()
 
 
 async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -649,8 +543,8 @@ async def cmd_compact(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     user_id = update.effective_user.id
-    state = get_user_state(user_id)
-    settings = get_user_settings(user_id)
+    state = get_manager().get_user_state(user_id)
+    settings = get_manager().get_user_settings(user_id)
 
     if not state.get("current_session"):
         await update.message.reply_text("No active session to compact. Start a conversation first.")
@@ -672,7 +566,7 @@ async def cmd_compact(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Save summary as pending context for next message, start fresh session
         state["compact_summary"] = summary
         state["current_session"] = None
-        save_state()
+        get_manager().save_state()
 
         preview = summary[:400] + "..." if len(summary) > 400 else summary
         await processing_msg.edit_text(
@@ -693,7 +587,7 @@ async def cmd_continue(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     user_id = update.effective_user.id
-    state = get_user_state(user_id)
+    state = get_manager().get_user_state(user_id)
 
     if state["current_session"]:
         await update.message.reply_text(f"Continuing session: {state['current_session'][:8]}...")
@@ -710,7 +604,7 @@ async def cmd_sessions(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     user_id = update.effective_user.id
-    state = get_user_state(user_id)
+    state = get_manager().get_user_state(user_id)
 
     names = state.get("session_names", {})
     sessions_data = [
@@ -738,7 +632,7 @@ async def cmd_switch(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     user_id = update.effective_user.id
-    state = get_user_state(user_id)
+    state = get_manager().get_user_state(user_id)
     session_id = context.args[0]
 
     # Find matching session
@@ -746,7 +640,7 @@ async def cmd_switch(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if len(matches) == 1:
         state["current_session"] = matches[0]
-        save_state()
+        get_manager().save_state()
         await update.message.reply_text(f"Switched to session: {matches[0][:8]}...")
     elif len(matches) > 1:
         await update.message.reply_text(f"Multiple matches. Be more specific.")
@@ -764,7 +658,7 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     logger.debug(f"STATUS command from user {update.effective_user.id}")
     user_id = update.effective_user.id
-    state = get_user_state(user_id)
+    state = get_manager().get_user_state(user_id)
 
     if state["current_session"]:
         await update.message.reply_text(
@@ -836,7 +730,7 @@ async def cmd_health(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Session info
     user_id = update.effective_user.id
-    state = get_user_state(user_id)
+    state = get_manager().get_user_state(user_id)
     status.append(f"\nSessions: {len(state['sessions'])}")
     status.append(f"Current: {state['current_session'][:8] if state['current_session'] else 'None'}...")
 
@@ -864,7 +758,7 @@ async def cmd_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     user_id = update.effective_user.id
-    settings = get_user_settings(user_id)
+    settings = get_manager().get_user_settings(user_id)
 
     # Build settings message
     audio_status = "ON" if settings["audio_enabled"] else "OFF"
@@ -934,7 +828,7 @@ async def handle_automations_callback(update: Update, context: ContextTypes.DEFA
 
     data = query.data
     user_id = update.effective_user.id
-    settings = get_user_settings(user_id)
+    settings = get_manager().get_user_settings(user_id)
     card_style = settings.get("automation_card_style", "full")
 
     # ── Back to list ──────────────────────────────────────────
@@ -1222,24 +1116,24 @@ async def handle_settings_callback(update: Update, context: ContextTypes.DEFAULT
     logger.debug(f"SETTINGS CALLBACK received: {query.data} from user {update.effective_user.id}")
 
     user_id = update.effective_user.id
-    settings = get_user_settings(user_id)
+    settings = get_manager().get_user_settings(user_id)
     callback_data = query.data
 
     if callback_data == "setting_audio_toggle":
         settings["audio_enabled"] = not settings["audio_enabled"]
-        save_settings()
+        get_manager().save_settings()
         logger.debug(f"Audio toggled to: {settings['audio_enabled']}")
 
     elif callback_data == "setting_mode_toggle":
         current_mode = settings.get("mode", "go_all")
         settings["mode"] = "approve" if current_mode == "go_all" else "go_all"
-        save_settings()
+        get_manager().save_settings()
         logger.debug(f"Mode toggled to: {settings['mode']}")
 
     elif callback_data == "setting_watch_cycle":
         cycle = {"off": "live", "live": "debug", "debug": "off"}
         settings["watch_mode"] = cycle.get(settings.get("watch_mode", "off"), "off")
-        save_settings()
+        get_manager().save_settings()
         logger.debug(f"Watch mode cycled to: {settings['watch_mode']}")
 
     elif callback_data.startswith("setting_speed_"):
@@ -1253,13 +1147,13 @@ async def handle_settings_callback(update: Update, context: ContextTypes.DEFAULT
             return
 
         settings["voice_speed"] = speed
-        save_settings()
+        get_manager().save_settings()
         logger.debug(f"Speed set to: {speed}")
 
     elif callback_data == "setting_card_style_toggle":
         current = settings.get("automation_card_style", "full")
         settings["automation_card_style"] = "compact" if current == "full" else "full"
-        save_settings()
+        get_manager().save_settings()
         logger.debug(f"Card style toggled to: {settings['automation_card_style']}")
 
     # Build updated settings menu
@@ -1373,8 +1267,8 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(rate_msg)
         return
 
-    state = get_user_state(user_id)
-    settings = get_user_settings(user_id)
+    state = get_manager().get_user_state(user_id)
+    settings = get_manager().get_user_settings(user_id)
 
     # Typing indicator first — signals immediately that bot is alive
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
@@ -1403,7 +1297,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         compact_summary = state.pop("compact_summary", None)
         if compact_summary:
             text = f"<previous_session_summary>\n{compact_summary}\n</previous_session_summary>\n\n{text}"
-            save_state()
+            get_manager().save_state()
 
         # Show what was heard
         await processing_msg.edit_text(f"Heard: {text[:100]}{'...' if len(text) > 100 else ''}\n\nToris thinking...")
@@ -1426,14 +1320,14 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
             indicator.stop()
 
         # Update session state
-        async with get_user_lock(str(user_id)):
+        async with get_manager().get_lock(user_id):
             if new_session_id and new_session_id != state["current_session"]:
                 state["current_session"] = new_session_id
                 name = state.pop("pending_session_name", None)
                 state.setdefault("session_names", {})[new_session_id] = name
                 if new_session_id not in state["sessions"]:
                     state["sessions"].append(new_session_id)
-                save_state()
+                get_manager().save_state()
 
         # Send text response (split if too long)
         tool_log = metadata.get("tool_log", [])
@@ -1479,8 +1373,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(rate_msg)
         return
 
-    state = get_user_state(user_id)
-    settings = get_user_settings(user_id)
+    state = get_manager().get_user_state(user_id)
+    settings = get_manager().get_user_settings(user_id)
     text = update.message.text
 
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
@@ -1492,7 +1386,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     compact_summary = state.pop("compact_summary", None)
     if compact_summary:
         text = f"<previous_session_summary>\n{compact_summary}\n</previous_session_summary>\n\n{text}"
-        save_state()
+        get_manager().save_state()
 
     try:
         continue_last = state["current_session"] is not None
@@ -1511,14 +1405,14 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         finally:
             indicator.stop()
 
-        async with get_user_lock(str(user_id)):
+        async with get_manager().get_lock(user_id):
             if new_session_id and new_session_id != state["current_session"]:
                 state["current_session"] = new_session_id
                 name = state.pop("pending_session_name", None)
                 state.setdefault("session_names", {})[new_session_id] = name
                 if new_session_id not in state["sessions"]:
                     state["sessions"].append(new_session_id)
-                save_state()
+                get_manager().save_state()
 
         # Send text response (split if too long)
         tool_log = metadata.get("tool_log", [])
@@ -1563,8 +1457,8 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(rate_msg)
         return
 
-    state = get_user_state(user_id)
-    settings = get_user_settings(user_id)
+    state = get_manager().get_user_state(user_id)
+    settings = get_manager().get_user_settings(user_id)
 
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
     typing_stop = asyncio.Event()
@@ -1592,7 +1486,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         compact_summary = state.pop("compact_summary", None)
         if compact_summary:
             prompt = f"<previous_session_summary>\n{compact_summary}\n</previous_session_summary>\n\n{prompt}"
-            save_state()
+            get_manager().save_state()
 
         await processing_msg.edit_text("Toris thinking...")
 
@@ -1612,14 +1506,14 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         finally:
             indicator.stop()
 
-        async with get_user_lock(str(user_id)):
+        async with get_manager().get_lock(user_id):
             if new_session_id and new_session_id != state["current_session"]:
                 state["current_session"] = new_session_id
                 name = state.pop("pending_session_name", None)
                 state.setdefault("session_names", {})[new_session_id] = name
                 if new_session_id not in state["sessions"]:
                     state["sessions"].append(new_session_id)
-                save_state()
+                get_manager().save_state()
 
         tool_log = metadata.get("tool_log", [])
         await finalize_response(update, processing_msg, response)
@@ -1646,8 +1540,8 @@ def main():
 
     # Now validate environment (will check if auth is configured)
     validate_environment()
-    load_state()
-    load_settings()
+    StateManager.init(_cfg.STATE_FILE, _cfg.SETTINGS_FILE)
+    get_manager().load()
 
     # Enable concurrent_updates to allow callback handlers to run while message handlers await
     # This is CRITICAL for approve mode - the approval callback needs to run while call_claude waits
