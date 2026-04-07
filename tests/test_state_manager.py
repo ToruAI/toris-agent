@@ -157,3 +157,28 @@ class TestStateManagerUserSettingsDefaults:
         assert s["watch_mode"] == "off"
         assert "watch_enabled" not in s
         assert "show_activity" not in s
+
+    def test_migration_both_flags_true_watch_enabled_wins(self, sm):
+        """When both watch_enabled and show_activity are True, watch_enabled takes precedence."""
+        sm._settings["u1"] = {"watch_enabled": True, "show_activity": True}
+        s = sm.get_user_settings("u1")
+        assert s["watch_mode"] == "live"   # watch_enabled checked first
+        assert "watch_enabled" not in s
+        assert "show_activity" not in s
+
+    def test_settings_persist_reload_no_remigration(self, tmp_path):
+        """Migrated settings survive a save/reload cycle without re-triggering migration."""
+        sm1 = StateManager(tmp_path / "state.json", tmp_path / "settings.json")
+        sm1._settings["u1"] = {"watch_enabled": True}
+        # First call migrates watch_enabled → watch_mode = "live"
+        s = sm1.get_user_settings("u1")
+        assert s["watch_mode"] == "live"
+        sm1.save_settings()
+
+        # Reload in a fresh instance
+        sm2 = StateManager(tmp_path / "state.json", tmp_path / "settings.json")
+        sm2.load()
+        s2 = sm2.get_user_settings("u1")
+        # watch_mode already present → migration branch not taken
+        assert s2["watch_mode"] == "live"
+        assert "watch_enabled" not in s2
