@@ -859,3 +859,10 @@ class TestSessionHandlersImport:
         text = format_sessions_list(sessions)
         assert "abc123d" in text
         assert "test" in text
+
+
+class TestAdminHandlersImport:
+    def test_admin_handlers_importable(self):
+        from handlers.admin import handle_settings_callback, handle_approval_callback
+        assert callable(handle_settings_callback)
+        assert callable(handle_approval_callback)
