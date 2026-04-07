@@ -104,6 +104,16 @@ async def typing_loop(update: Update, context: ContextTypes.DEFAULT_TYPE, stop_e
             pass
 
 
+def _update_session_state(state: dict, new_session_id: str, mgr) -> None:
+    """Persist a new session_id into user state."""
+    state["current_session"] = new_session_id
+    name = state.pop("pending_session_name", None)
+    state.setdefault("session_names", {})[new_session_id] = name
+    if new_session_id not in state["sessions"]:
+        state["sessions"].append(new_session_id)
+    mgr.save_state()
+
+
 async def handle_automations_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle all auto_* callback button taps."""
     query = update.callback_query
@@ -278,12 +288,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Update session state
         async with get_manager().get_lock(user_id):
             if new_session_id and new_session_id != state["current_session"]:
-                state["current_session"] = new_session_id
-                name = state.pop("pending_session_name", None)
-                state.setdefault("session_names", {})[new_session_id] = name
-                if new_session_id not in state["sessions"]:
-                    state["sessions"].append(new_session_id)
-                get_manager().save_state()
+                _update_session_state(state, new_session_id, get_manager())
 
         # Send text response (split if too long)
         await finalize_response(update, processing_msg, response)
@@ -362,12 +367,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         async with get_manager().get_lock(user_id):
             if new_session_id and new_session_id != state["current_session"]:
-                state["current_session"] = new_session_id
-                name = state.pop("pending_session_name", None)
-                state.setdefault("session_names", {})[new_session_id] = name
-                if new_session_id not in state["sessions"]:
-                    state["sessions"].append(new_session_id)
-                get_manager().save_state()
+                _update_session_state(state, new_session_id, get_manager())
 
         # Send text response (split if too long)
         await finalize_response(update, processing_msg, response)
@@ -460,12 +460,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         async with get_manager().get_lock(user_id):
             if new_session_id and new_session_id != state["current_session"]:
-                state["current_session"] = new_session_id
-                name = state.pop("pending_session_name", None)
-                state.setdefault("session_names", {})[new_session_id] = name
-                if new_session_id not in state["sessions"]:
-                    state["sessions"].append(new_session_id)
-                get_manager().save_state()
+                _update_session_state(state, new_session_id, get_manager())
 
         await finalize_response(update, processing_msg, response)
 
