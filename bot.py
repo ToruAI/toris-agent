@@ -133,7 +133,7 @@ import config as _cfg
 from auth import should_handle_message, _is_authorized, _is_admin, check_rate_limit, rate_limits
 from handlers.session import (
     cmd_start, cmd_new, cmd_cancel, cmd_compact, cmd_continue,
-    cmd_sessions, cmd_switch, cmd_status,
+    cmd_sessions, cmd_switch, cmd_status, cmd_search,
 )
 from handlers.admin import (
     cmd_setup, cmd_claude_token, cmd_elevenlabs_key, cmd_openai_key,
@@ -424,6 +424,7 @@ def main():
     app.add_handler(CommandHandler("sessions", cmd_sessions))
     app.add_handler(CommandHandler("switch", cmd_switch))
     app.add_handler(CommandHandler("status", cmd_status))
+    app.add_handler(CommandHandler("search", cmd_search))
     app.add_handler(CommandHandler("health", cmd_health))
     app.add_handler(CommandHandler("settings", cmd_settings))
     app.add_handler(CommandHandler("automations", cmd_automations))
@@ -456,6 +457,7 @@ def main():
             BotCommand("continue", "Continue last session"),
             BotCommand("sessions", "List recent sessions"),
             BotCommand("switch",   "Switch to a session by ID"),
+            BotCommand("search",   "Search sessions by keyword"),
             BotCommand("status",   "Current session info"),
             BotCommand("settings",    "Voice, mode & speed settings"),
             BotCommand("health",   "Check bot & API status"),

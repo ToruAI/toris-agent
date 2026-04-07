@@ -1,19 +1,49 @@
 """
 Session command handlers.
 
-Commands: /start /new /cancel /compact /continue /sessions /switch /status
+Commands: /start /new /cancel /compact /continue /sessions /switch /status /search
 """
+import json
 import logging
+from pathlib import Path
 
 from telegram import Update
 from telegram.ext import ContextTypes
 
+import config as _cfg
 import shared_state as _shared
 from auth import should_handle_message, _is_authorized
 from claude_service import call_claude
 from state_manager import get_manager
 
 logger = logging.getLogger(__name__)
+
+
+def _get_session_first_prompt(session_id: str) -> "str | None":
+    """Return the first user message text from a Claude session JSONL file."""
+    hashed = _cfg.SANDBOX_DIR.replace("/", "-")
+    jsonl_path = Path.home() / ".claude" / "projects" / hashed / f"{session_id}.jsonl"
+    if not jsonl_path.exists():
+        return None
+    try:
+        with open(jsonl_path) as f:
+            for line in f:
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                msg = obj.get("message", {})
+                if msg.get("role") == "user":
+                    content = msg.get("content", "")
+                    if isinstance(content, list):
+                        for c in content:
+                            if isinstance(c, dict) and c.get("type") == "text":
+                                return c["text"]
+                    elif isinstance(content, str):
+                        return content
+    except Exception:
+        pass
+    return None
 
 
 def parse_session_name(args: list) -> "str | None":
@@ -239,3 +269,56 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("New session pending — send a message to start.")
     else:
         await update.message.reply_text("No active session. Use /new to start one.")
+
+
+async def cmd_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /search command - find sessions by keyword in name or first message."""
+    if not should_handle_message(update.message.message_thread_id):
+        return
+
+    if not _is_authorized(update):
+        return
+
+    if not context.args:
+        await update.message.reply_text("Usage: /search <keyword>")
+        return
+
+    query = " ".join(context.args).lower().strip()
+    user_id = update.effective_user.id
+    state = get_manager().get_user_state(user_id)
+
+    sessions = state.get("sessions", [])
+    names = state.get("session_names", {})
+
+    if not sessions:
+        await update.message.reply_text("No sessions yet.")
+        return
+
+    matches = []
+    for sid in reversed(sessions):  # most recent first
+        name = names.get(sid) or ""
+        first_prompt = _get_session_first_prompt(sid) or ""
+
+        if query in (name + " " + first_prompt).lower():
+            excerpt = first_prompt[:120].replace("\n", " ")
+            if len(first_prompt) > 120:
+                excerpt += "..."
+            matches.append((sid, name, excerpt))
+
+        if len(matches) >= 8:
+            break
+
+    if not matches:
+        await update.message.reply_text(f"No sessions matching: {query}")
+        return
+
+    lines = [f"Sessions matching *{query}*:\n"]
+    for sid, name, excerpt in matches:
+        short = sid[:8]
+        name_part = f" — {name}" if name else ""
+        lines.append(f"`{short}`{name_part}")
+        if excerpt:
+            lines.append(f"_{excerpt}_")
+        lines.append(f"→ /switch {short}\n")
+
+    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
