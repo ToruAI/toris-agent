@@ -296,34 +296,39 @@ async def cmd_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("No sessions yet.")
         return
 
-    # Build session metadata for Claude (last 30, most recent first)
-    session_data = []
-    for sid in reversed(sessions[-30:]):
-        name = names.get(sid) or ""
-        first_prompt = _get_session_first_prompt(sid) or ""
-        session_data.append({
-            "id": sid,
-            "name": name,
-            "first_message": first_prompt[:300],
-        })
-
     searching_msg = await update.message.reply_text("🔍 Searching sessions...")
 
-    prompt = (
-        "You are searching through conversation session records. "
-        "Given the user's query, return the IDs of the most relevant sessions.\n\n"
-        f'Query: "{query}"\n\n'
-        f"Sessions (JSON):\n{json.dumps(session_data, ensure_ascii=False)}\n\n"
-        "Return ONLY a JSON array of session IDs (the full 'id' values), "
-        "most relevant first, up to 5. "
-        'If nothing is relevant return an empty array. Example: ["abc-123", "def-456"]'
-    )
+    # Sessions dir where JSONL files live
+    hashed = _cfg.SANDBOX_DIR.replace("/", "-")
+    sessions_dir = str(Path.home() / ".claude" / "projects" / hashed)
+    session_ids = list(reversed(sessions[-30:]))  # most recent first
+    names_json = json.dumps({sid: names.get(sid) for sid in session_ids}, ensure_ascii=False)
+
+    prompt = f"""Search through conversation session files and find sessions relevant to this query.
+
+Query: "{query}"
+
+Sessions directory: {sessions_dir}/
+Valid session IDs (most recent first): {json.dumps(session_ids)}
+Session names: {names_json}
+
+Each session is a .jsonl file named <session-id>.jsonl
+User messages in each file look like: {{"message": {{"role": "user", "content": "..."}}}}
+
+Instructions:
+1. Search the JSONL files for content relevant to the query — grep by keywords, read promising files
+2. Look at multiple messages per session, not just the first
+3. Rank by actual relevance to the query
+4. Return ONLY a JSON array of matching session IDs (the full UUIDs from the valid list), most relevant first, max 5
+5. If nothing is relevant return []
+
+Output format (nothing else): ["full-uuid-1", "full-uuid-2"]"""
 
     try:
         result = await asyncio.to_thread(
             subprocess.run,
-            ["claude", "-p", prompt, "--output-format", "json"],
-            capture_output=True, text=True, timeout=30,
+            ["claude", "-p", prompt, "--allowedTools", "Bash,Read", "--output-format", "json"],
+            capture_output=True, text=True, timeout=60,
             cwd=_cfg.CLAUDE_WORKING_DIR,
         )
         if result.returncode != 0:
@@ -332,7 +337,6 @@ async def cmd_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         outer = json.loads(result.stdout)
         raw_result = outer.get("result", "")
-        # Claude returns the JSON array inside the result string
         start = raw_result.find("[")
         end = raw_result.rfind("]") + 1
         if start == -1 or end == 0:
@@ -348,16 +352,16 @@ async def cmd_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await searching_msg.edit_text(f"No sessions matching: {query}")
         return
 
-    # Build id → metadata map for display
-    meta = {s["id"]: s for s in session_data}
+    # Fetch first prompts for display (already have them cached in _get_session_first_prompt)
     lines = [f"Sessions matching *{query}*:\n"]
     for sid in matched_ids:
-        if sid not in meta:
+        if sid not in sessions:
             continue
         short = sid[:8]
-        name = meta[sid]["name"]
-        excerpt = meta[sid]["first_message"][:120].replace("\n", " ")
-        if len(meta[sid]["first_message"]) > 120:
+        name = names.get(sid) or ""
+        first_prompt = _get_session_first_prompt(sid) or ""
+        excerpt = first_prompt[:120].replace("\n", " ")
+        if len(first_prompt) > 120:
             excerpt += "..."
         name_part = f" — {name}" if name else ""
         lines.append(f"`{short}`{name_part}")
