@@ -866,3 +866,11 @@ class TestAdminHandlersImport:
         from handlers.admin import handle_settings_callback, handle_approval_callback
         assert callable(handle_settings_callback)
         assert callable(handle_approval_callback)
+
+
+class TestMessageHandlersImport:
+    def test_message_handlers_importable(self):
+        from handlers.messages import handle_voice, handle_text, handle_photo
+        assert callable(handle_voice)
+        assert callable(handle_text)
+        assert callable(handle_photo)
