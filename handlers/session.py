@@ -9,7 +9,7 @@ import logging
 import subprocess
 from pathlib import Path
 
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
 import config as _cfg
@@ -358,21 +358,45 @@ async def cmd_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await searching_msg.edit_text(f"No sessions matching: {query}")
         return
 
-    # Fetch first prompts for display (already have them cached in _get_session_first_prompt)
     lines = [f"Sessions matching *{query}*:\n"]
+    buttons = []
     for sid in matched_ids:
         if sid not in sessions:
             continue
-        short = sid[:8]
         name = names.get(sid) or ""
         first_prompt = _get_session_first_prompt(sid) or ""
         excerpt = first_prompt[:120].replace("\n", " ")
         if len(first_prompt) > 120:
             excerpt += "..."
         name_part = f" — {name}" if name else ""
-        lines.append(f"`{short}`{name_part}")
+        lines.append(f"`{sid[:8]}`{name_part}")
         if excerpt:
-            lines.append(f"_{excerpt}_")
-        lines.append(f"→ /switch {short}\n")
+            lines.append(f"_{excerpt}_\n")
+        label = name if name else sid[:8]
+        buttons.append([InlineKeyboardButton(f"Switch → {label}", callback_data=f"sess_switch_{sid}")])
 
-    await searching_msg.edit_text("\n".join(lines), parse_mode="Markdown")
+    keyboard = InlineKeyboardMarkup(buttons) if buttons else None
+    await searching_msg.edit_text("\n".join(lines), parse_mode="Markdown", reply_markup=keyboard)
+
+
+async def handle_session_switch_callback(update, context):
+    """Handle session switch button from /search results."""
+    query = update.callback_query
+    await query.answer()
+
+    sid = query.data.removeprefix("sess_switch_")
+    user_id = update.effective_user.id
+    state = get_manager().get_user_state(user_id)
+
+    if sid not in state.get("sessions", []):
+        await query.edit_message_reply_markup(reply_markup=None)
+        await query.message.reply_text("Session not found.")
+        return
+
+    state["current_session"] = sid
+    get_manager().save_state()
+
+    names = state.get("session_names", {})
+    name = names.get(sid) or sid[:8]
+    await query.edit_message_reply_markup(reply_markup=None)
+    await query.message.reply_text(f"Switched to: *{name}*", parse_mode="Markdown")

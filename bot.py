@@ -134,6 +134,7 @@ from auth import should_handle_message, _is_authorized, _is_admin, check_rate_li
 from handlers.session import (
     cmd_start, cmd_new, cmd_cancel, cmd_compact, cmd_continue,
     cmd_sessions, cmd_switch, cmd_status, cmd_search,
+    handle_session_switch_callback,
 )
 from handlers.admin import (
     cmd_setup, cmd_claude_token, cmd_elevenlabs_key, cmd_openai_key,
@@ -437,6 +438,7 @@ def main():
     app.add_handler(CallbackQueryHandler(handle_settings_callback, pattern="^setting_"))
     app.add_handler(CallbackQueryHandler(handle_approval_callback, pattern="^(approve_|reject_)"))
     app.add_handler(CallbackQueryHandler(handle_automations_callback, pattern="^auto_"))
+    app.add_handler(CallbackQueryHandler(handle_session_switch_callback, pattern="^sess_switch_"))
 
     # Messages
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
