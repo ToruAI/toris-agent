@@ -283,11 +283,7 @@ def check_rate_limit(user_id: int) -> tuple[bool, str]:
     return True, ""
 
 
-# Pending tool approvals: {approval_id: {"event": asyncio.Event, "approved": bool, "tool_name": str, "input": dict}}
-pending_approvals = {}
-
-# Cancellation events per user — set by /cancel to interrupt active call_claude
-cancel_events: dict[int, asyncio.Event] = {}
+from shared_state import pending_approvals, cancel_events
 
 # State files for persistence
 STATE_FILE = _cfg.STATE_FILE
@@ -1714,7 +1710,6 @@ def main():
     logger.debug(f"Chat ID: {ALLOWED_CHAT_ID}")
     logger.debug(f"Topic ID: {TOPIC_ID or 'ALL (no filter)'}")
     logger.debug(f"System prompt: {SYSTEM_PROMPT_FILE or 'default'}")
-    claude_service.configure(pending_approvals, cancel_events)
     print(f"{PERSONA_NAME} is ready. Waiting for messages...")
     app.run_polling(
         drop_pending_updates=True,

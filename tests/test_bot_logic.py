@@ -964,5 +964,4 @@ class TestClaudeServiceImport:
         assert callable(claude_service.call_claude)
         assert callable(claude_service.build_claude_options)
         assert callable(claude_service.build_dynamic_prompt)
-        assert callable(claude_service.configure)
         assert hasattr(claude_service, "WorkingIndicator")

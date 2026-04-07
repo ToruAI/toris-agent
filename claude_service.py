@@ -2,7 +2,6 @@
 Claude service module — prompt building, SDK integration, and working indicator.
 
 Extracted from bot.py. All Claude-specific logic lives here.
-Call configure() once in main() before run_polling() to inject shared state dicts.
 """
 import asyncio
 import json
@@ -28,21 +27,9 @@ from claude_agent_sdk.types import (
 )
 
 import config as _cfg
+import shared_state as _shared
 
 logger = logging.getLogger(__name__)
-
-# ── Shared state injected via configure() ─────────────────────────────────────
-
-_pending_approvals: dict = {}
-_cancel_events: dict = {}
-
-
-def configure(pending_approvals: dict, cancel_events: dict):
-    """Inject shared state dicts from bot.py. Call once in main() before run_polling()."""
-    global _pending_approvals, _cancel_events
-    _pending_approvals = pending_approvals
-    _cancel_events = cancel_events
-
 
 # ── System prompt ──────────────────────────────────────────────────────────────
 
@@ -223,7 +210,7 @@ async def call_claude(
         approval_event = asyncio.Event()
 
         # Store pending approval with requesting user_id
-        _pending_approvals[current_approval_id] = {
+        _shared.pending_approvals[current_approval_id] = {
             "user_id": update.effective_user.id,
             "event": approval_event,
             "approved": None,
@@ -243,7 +230,7 @@ async def call_claude(
         message_text = f"Tool Request:\n{format_tool_call(tool_name, tool_input)}"
         await update.message.reply_text(message_text, reply_markup=reply_markup, parse_mode="Markdown")
 
-        logger.debug(f">>> Waiting for approval: {current_approval_id} ({tool_name}) - _pending_approvals keys: {list(_pending_approvals.keys())}")
+        logger.debug(f">>> Waiting for approval: {current_approval_id} ({tool_name}) - _shared.pending_approvals keys: {list(_shared.pending_approvals.keys())}")
 
         # Wait for user response (with timeout)
         try:
@@ -252,12 +239,12 @@ async def call_claude(
             logger.debug(f">>> Event.wait() completed for {current_approval_id}")
         except asyncio.TimeoutError:
             logger.debug(f">>> Approval timeout for {current_approval_id}")
-            del _pending_approvals[current_approval_id]
+            del _shared.pending_approvals[current_approval_id]
             return PermissionResultDeny(message="Approval timed out")
 
         # Check result
         logger.debug(f">>> Checking result for {current_approval_id}")
-        approval_data = _pending_approvals.pop(current_approval_id, {})
+        approval_data = _shared.pending_approvals.pop(current_approval_id, {})
         if approval_data.get("approved"):
             logger.debug(f">>> Tool approved: {tool_name}")
             return PermissionResultAllow()
@@ -287,9 +274,9 @@ async def call_claude(
     # Set up cancellation tracking for this user
     user_id_for_cancel = update.effective_user.id if update else None
     if user_id_for_cancel is not None:
-        if user_id_for_cancel not in _cancel_events:
-            _cancel_events[user_id_for_cancel] = asyncio.Event()
-        _cancel_events[user_id_for_cancel].clear()  # Reset at start of each call
+        if user_id_for_cancel not in _shared.cancel_events:
+            _shared.cancel_events[user_id_for_cancel] = asyncio.Event()
+        _shared.cancel_events[user_id_for_cancel].clear()  # Reset at start of each call
 
     async def _run_claude():
         nonlocal result_text, new_session_id, tool_count, tool_log, debug_msg
@@ -298,7 +285,7 @@ async def call_claude(
             await client.query(full_prompt)
             async for message in client.receive_response():
                 # Check for user cancellation
-                if user_id_for_cancel is not None and _cancel_events.get(user_id_for_cancel, asyncio.Event()).is_set():
+                if user_id_for_cancel is not None and _shared.cancel_events.get(user_id_for_cancel, asyncio.Event()).is_set():
                     logger.debug(f"Call cancelled by user {user_id_for_cancel}")
                     result_text = (result_text + "\n\n[Cancelled]").strip()
                     break
