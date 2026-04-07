@@ -18,6 +18,7 @@ DEFAULT_USER_SETTINGS: dict = {
     "voice_speed": 1.1,
     "mode": "go_all",
     "watch_mode": "off",
+    "automation_card_style": "full",
 }
 
 _instance: "StateManager | None" = None
@@ -113,21 +114,22 @@ class StateManager:
 
         s = self._settings[key]
 
+        # Migrate watch_enabled / show_activity → watch_mode (legacy field names)
+        # Run before defaults so legacy keys take precedence over the default "off".
+        if "watch_mode" not in s:
+            if s.get("watch_enabled"):
+                s["watch_mode"] = "live"
+            elif s.get("show_activity"):
+                s["watch_mode"] = "debug"
+            else:
+                s["watch_mode"] = "off"
+        s.pop("watch_enabled", None)
+        s.pop("show_activity", None)
+
         # Apply any missing defaults
         for field, default in DEFAULT_USER_SETTINGS.items():
             if field not in s:
                 s[field] = default
-
-        # Migrate watch_enabled / show_activity → watch_mode (legacy field names)
-        if "watch_mode" not in s or s.get("watch_enabled") or s.get("show_activity"):
-            if s.pop("watch_enabled", False):
-                s["watch_mode"] = "live"
-            elif s.pop("show_activity", False):
-                s["watch_mode"] = "debug"
-            else:
-                s["watch_mode"] = s.get("watch_mode", "off")
-        s.pop("watch_enabled", None)
-        s.pop("show_activity", None)
 
         return s
 

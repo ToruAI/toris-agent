@@ -131,6 +131,7 @@ class TestStateManagerUserSettingsDefaults:
         assert s["voice_speed"] == 1.1
         assert s["mode"] == "go_all"
         assert s["watch_mode"] == "off"
+        assert s["automation_card_style"] == "full"
 
     def test_existing_user_without_mode_gets_default(self, sm):
         sm._settings["u1"] = {"audio_enabled": False, "voice_speed": 1.0}
