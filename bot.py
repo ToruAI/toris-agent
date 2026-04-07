@@ -130,6 +130,7 @@ logger = logging.getLogger(__name__)
 
 # Config — loaded from config.py (single source of truth for all env vars)
 import config as _cfg
+from auth import should_handle_message, _is_authorized, _is_admin, check_rate_limit, rate_limits
 import voice_service
 from voice_service import (
     transcribe_voice,
@@ -170,42 +171,6 @@ STT_LANGUAGE = _cfg.STT_LANGUAGE
 # OpenAI client (None if no key configured)
 openai_client = OpenAIClient(api_key=_cfg.OPENAI_API_KEY) if _cfg.OPENAI_API_KEY else None
 
-def should_handle_message(message_thread_id: int | None) -> bool:
-    """Check if this bot instance should handle a message based on topic filtering."""
-    if not TOPIC_ID:
-        # No topic filter set = handle all messages
-        return True
-
-    # Convert to int for comparison
-    try:
-        allowed_topic = int(TOPIC_ID)
-    except (ValueError, TypeError):
-        logger.debug(f"WARNING: Invalid TOPIC_ID '{TOPIC_ID}', handling all messages")
-        return True
-
-    # Check if message is in the allowed topic
-    if message_thread_id is None:
-        # Message not in any topic (general chat) - don't handle if we have a specific topic
-        logger.debug(f"Message not in a topic, but we're filtering for topic {allowed_topic}")
-        return False
-
-    return message_thread_id == allowed_topic
-
-
-def _is_authorized(update) -> bool:
-    """Check if the chat is authorized to use this bot."""
-    return ALLOWED_CHAT_ID == 0 or update.effective_chat.id == ALLOWED_CHAT_ID
-
-
-def _is_admin(update) -> bool:
-    """Check if user is allowed to run admin commands (token setup, etc.)."""
-    if not _is_authorized(update):
-        return False
-    if not ADMIN_USER_IDS:
-        return True  # Backward compat: no admin list = anyone in authorized chat
-    return update.effective_user.id in ADMIN_USER_IDS
-
-
 # Voice settings for expressive delivery
 VOICE_SETTINGS = {
     "stability": 0.3,           # More emotional range
@@ -216,55 +181,6 @@ VOICE_SETTINGS = {
 
 # ElevenLabs client
 elevenlabs = ElevenLabs(api_key=ELEVENLABS_API_KEY)
-
-# Rate limiting
-RATE_LIMIT_SECONDS = 2  # Minimum seconds between messages per user
-RATE_LIMIT_PER_MINUTE = 10  # Max messages per minute per user
-user_rate_limits = {}  # {user_id: {"last_message": timestamp, "minute_count": int, "minute_start": timestamp}}
-rate_limits = user_rate_limits  # Public alias for testing
-
-
-def check_rate_limit(user_id: int) -> tuple[bool, str]:
-    """
-    Check if user is within rate limits.
-    Returns (allowed, message) - if not allowed, message explains why.
-    """
-    import time
-
-    now = time.time()
-    user_id_str = str(user_id)
-
-    if user_id_str not in user_rate_limits:
-        user_rate_limits[user_id_str] = {
-            "last_message": 0,
-            "minute_count": 0,
-            "minute_start": now,
-        }
-
-    limits = user_rate_limits[user_id_str]
-
-    # Check per-message cooldown
-    time_since_last = now - limits["last_message"]
-    if time_since_last < RATE_LIMIT_SECONDS:
-        wait_time = RATE_LIMIT_SECONDS - time_since_last
-        return False, f"Please wait {wait_time:.1f}s before sending another message."
-
-    # Check per-minute limit
-    if now - limits["minute_start"] > 60:
-        # Reset minute counter
-        limits["minute_start"] = now
-        limits["minute_count"] = 0
-
-    if limits["minute_count"] >= RATE_LIMIT_PER_MINUTE:
-        return False, f"Rate limit reached ({RATE_LIMIT_PER_MINUTE}/min). Please wait."
-
-    # Update limits
-    limits["last_message"] = now
-    limits["minute_count"] += 1
-
-    return True, ""
-
-
 
 # Credentials file for user-provided API keys
 CREDENTIALS_FILE = _cfg.CREDENTIALS_FILE

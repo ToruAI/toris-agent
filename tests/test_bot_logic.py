@@ -21,6 +21,7 @@ os.environ.setdefault("TELEGRAM_DEFAULT_CHAT_ID", "0")
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import bot
+import auth
 import config
 
 
@@ -207,46 +208,43 @@ class TestMaxVoiceChars:
 # ─────────────────────────────────────────────
 
 class TestAdminUserIds:
-    def test_is_authorized_with_zero_chat_id(self):
+    def _make_cfg(self, allowed_chat_id=0, admin_user_ids=None):
+        return type("C", (), {
+            "ALLOWED_CHAT_ID": allowed_chat_id,
+            "ADMIN_USER_IDS": admin_user_ids if admin_user_ids is not None else set(),
+        })()
+
+    def test_is_authorized_with_zero_chat_id(self, monkeypatch):
         """ALLOWED_CHAT_ID=0 means all chats allowed."""
-        orig = bot.ALLOWED_CHAT_ID
-        bot.ALLOWED_CHAT_ID = 0
+        monkeypatch.setattr(auth, "_cfg", self._make_cfg(allowed_chat_id=0))
 
         class FakeUpdate:
             class effective_chat:
                 id = 12345
 
-        assert bot._is_authorized(FakeUpdate()) is True
-        bot.ALLOWED_CHAT_ID = orig
+        assert auth._is_authorized(FakeUpdate()) is True
 
-    def test_is_authorized_matching_chat_id(self):
-        orig = bot.ALLOWED_CHAT_ID
-        bot.ALLOWED_CHAT_ID = 99999
+    def test_is_authorized_matching_chat_id(self, monkeypatch):
+        monkeypatch.setattr(auth, "_cfg", self._make_cfg(allowed_chat_id=99999))
 
         class FakeUpdate:
             class effective_chat:
                 id = 99999
 
-        assert bot._is_authorized(FakeUpdate()) is True
-        bot.ALLOWED_CHAT_ID = orig
+        assert auth._is_authorized(FakeUpdate()) is True
 
-    def test_is_authorized_wrong_chat_id(self):
-        orig = bot.ALLOWED_CHAT_ID
-        bot.ALLOWED_CHAT_ID = 99999
+    def test_is_authorized_wrong_chat_id(self, monkeypatch):
+        monkeypatch.setattr(auth, "_cfg", self._make_cfg(allowed_chat_id=99999))
 
         class FakeUpdate:
             class effective_chat:
                 id = 11111
 
-        assert bot._is_authorized(FakeUpdate()) is False
-        bot.ALLOWED_CHAT_ID = orig
+        assert auth._is_authorized(FakeUpdate()) is False
 
-    def test_is_admin_empty_admin_ids_allows_authorized(self):
+    def test_is_admin_empty_admin_ids_allows_authorized(self, monkeypatch):
         """No ADMIN_USER_IDS configured → anyone in authorized chat is admin."""
-        orig_chat = bot.ALLOWED_CHAT_ID
-        orig_admin = bot.ADMIN_USER_IDS
-        bot.ALLOWED_CHAT_ID = 0
-        bot.ADMIN_USER_IDS = set()
+        monkeypatch.setattr(auth, "_cfg", self._make_cfg(allowed_chat_id=0, admin_user_ids=set()))
 
         class FakeUpdate:
             class effective_chat:
@@ -254,15 +252,10 @@ class TestAdminUserIds:
             class effective_user:
                 id = 99999
 
-        assert bot._is_admin(FakeUpdate()) is True
-        bot.ALLOWED_CHAT_ID = orig_chat
-        bot.ADMIN_USER_IDS = orig_admin
+        assert auth._is_admin(FakeUpdate()) is True
 
-    def test_is_admin_with_admin_ids_matching(self):
-        orig_chat = bot.ALLOWED_CHAT_ID
-        orig_admin = bot.ADMIN_USER_IDS
-        bot.ALLOWED_CHAT_ID = 0
-        bot.ADMIN_USER_IDS = {111, 222}
+    def test_is_admin_with_admin_ids_matching(self, monkeypatch):
+        monkeypatch.setattr(auth, "_cfg", self._make_cfg(allowed_chat_id=0, admin_user_ids={111, 222}))
 
         class FakeUpdate:
             class effective_chat:
@@ -270,15 +263,10 @@ class TestAdminUserIds:
             class effective_user:
                 id = 111
 
-        assert bot._is_admin(FakeUpdate()) is True
-        bot.ALLOWED_CHAT_ID = orig_chat
-        bot.ADMIN_USER_IDS = orig_admin
+        assert auth._is_admin(FakeUpdate()) is True
 
-    def test_is_admin_with_admin_ids_not_matching(self):
-        orig_chat = bot.ALLOWED_CHAT_ID
-        orig_admin = bot.ADMIN_USER_IDS
-        bot.ALLOWED_CHAT_ID = 0
-        bot.ADMIN_USER_IDS = {111, 222}
+    def test_is_admin_with_admin_ids_not_matching(self, monkeypatch):
+        monkeypatch.setattr(auth, "_cfg", self._make_cfg(allowed_chat_id=0, admin_user_ids={111, 222}))
 
         class FakeUpdate:
             class effective_chat:
@@ -286,9 +274,7 @@ class TestAdminUserIds:
             class effective_user:
                 id = 999  # not in admin list
 
-        assert bot._is_admin(FakeUpdate()) is False
-        bot.ALLOWED_CHAT_ID = orig_chat
-        bot.ADMIN_USER_IDS = orig_admin
+        assert auth._is_admin(FakeUpdate()) is False
 
 
 class TestSettingsJson:
