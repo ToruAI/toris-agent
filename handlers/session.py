@@ -283,7 +283,17 @@ async def cmd_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Usage: /search <keyword>")
         return
 
-    query = " ".join(context.args).lower().strip()
+    raw = " ".join(context.args).lower().strip()
+    # Split into individual keywords; ignore short stop-words
+    _stop = {"a", "an", "the", "is", "in", "of", "to", "i", "w", "na", "do",
+              "z", "ze", "się", "że", "to", "co", "jak", "by", "była", "było",
+              "były", "był", "być", "jaka", "jaki", "nasze", "nasza", "nasz",
+              "która", "który", "które"}
+    keywords = [w.strip("?!.,;:") for w in raw.split() if len(w) > 2 and w not in _stop]
+    if not keywords:
+        await update.message.reply_text("Usage: /search <keyword>")
+        return
+
     user_id = update.effective_user.id
     state = get_manager().get_user_state(user_id)
 
@@ -294,25 +304,29 @@ async def cmd_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("No sessions yet.")
         return
 
-    matches = []
-    for sid in reversed(sessions):  # most recent first
+    scored = []
+    for sid in sessions:
         name = names.get(sid) or ""
         first_prompt = _get_session_first_prompt(sid) or ""
-
-        if query in (name + " " + first_prompt).lower():
+        searchable = (name + " " + first_prompt).lower()
+        hits = sum(1 for kw in keywords if kw in searchable)
+        if hits > 0:
             excerpt = first_prompt[:120].replace("\n", " ")
             if len(first_prompt) > 120:
                 excerpt += "..."
-            matches.append((sid, name, excerpt))
+            scored.append((hits, sid, name, excerpt))
 
-        if len(matches) >= 8:
-            break
+    # Sort by hit count desc, then preserve recency (stable sort keeps insertion order)
+    scored.sort(key=lambda x: -x[0])
+    matches = [(sid, name, excerpt) for _, sid, name, excerpt in scored[:8]]
 
     if not matches:
-        await update.message.reply_text(f"No sessions matching: {query}")
+        kw_str = ", ".join(keywords)
+        await update.message.reply_text(f"No sessions matching: {kw_str}")
         return
 
-    lines = [f"Sessions matching *{query}*:\n"]
+    kw_str = ", ".join(keywords)
+    lines = [f"Sessions matching *{kw_str}*:\n"]
     for sid, name, excerpt in matches:
         short = sid[:8]
         name_part = f" — {name}" if name else ""
