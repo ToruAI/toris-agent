@@ -6,10 +6,11 @@ transcription → Claude → TTS → state update → reply
 """
 import asyncio
 import logging
+import re
 from datetime import datetime
 from pathlib import Path
 
-from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ChatAction
 from telegram.ext import ContextTypes
 
@@ -44,16 +45,42 @@ def error_message(context: str, exc: Exception) -> str:
     return f"❌ {context}: {exc_str[:120]}"
 
 
-async def send_long_message(update: Update, first_msg, text: str, chunk_size: int = 4000):
+_UUID_RE = re.compile(r'\b([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b')
+
+
+def _session_keyboard(text: str, user_id: int):
+    """Return InlineKeyboardMarkup if text mentions any of the user's session UUIDs."""
+    state = get_manager().get_user_state(user_id)
+    sessions = state.get("sessions", [])
+    names = state.get("session_names", {})
+    session_set = set(sessions)
+
+    seen = []
+    for uid in _UUID_RE.findall(text):
+        if uid in session_set and uid not in seen:
+            seen.append(uid)
+
+    if not seen:
+        return None
+
+    buttons = []
+    for sid in seen[:5]:
+        name = names.get(sid) or sid[:8]
+        buttons.append([InlineKeyboardButton(f"↩ {name}", callback_data=f"sess_switch_{sid}")])
+    return InlineKeyboardMarkup(buttons)
+
+
+async def send_long_message(update: Update, first_msg, text: str, chunk_size: int = 4000, reply_markup=None):
     """Split long text into multiple Telegram messages.
 
     If first_msg is None, all chunks are sent as new reply messages.
+    reply_markup is attached to the last chunk only.
     """
     if len(text) <= chunk_size:
         if first_msg is None:
-            await update.message.reply_text(text)
+            await update.message.reply_text(text, reply_markup=reply_markup)
         else:
-            await first_msg.edit_text(text)
+            await first_msg.edit_text(text, reply_markup=reply_markup)
         return
 
     # Split into chunks
@@ -63,7 +90,6 @@ async def send_long_message(update: Update, first_msg, text: str, chunk_size: in
         if len(remaining) <= chunk_size:
             chunks.append(remaining)
             break
-        # Find a good break point (newline or space)
         break_point = remaining.rfind('\n', 0, chunk_size)
         if break_point == -1:
             break_point = remaining.rfind(' ', 0, chunk_size)
@@ -72,20 +98,20 @@ async def send_long_message(update: Update, first_msg, text: str, chunk_size: in
         chunks.append(remaining[:break_point])
         remaining = remaining[break_point:].lstrip()
 
-    # Send first chunk as edit (or new reply if first_msg is None), rest as new messages
     if first_msg is None:
         await update.message.reply_text(chunks[0] + f"\n\n[1/{len(chunks)}]")
     else:
         await first_msg.edit_text(chunks[0] + f"\n\n[1/{len(chunks)}]")
     for i, chunk in enumerate(chunks[1:], 2):
-        await update.message.reply_text(chunk + f"\n\n[{i}/{len(chunks)}]")
+        km = reply_markup if i == len(chunks) else None
+        await update.message.reply_text(chunk + f"\n\n[{i}/{len(chunks)}]", reply_markup=km)
 
     logger.debug(f"Sent {len(chunks)} message chunks")
 
 
-async def finalize_response(update: Update, processing_msg, response: str):
+async def finalize_response(update: Update, processing_msg, response: str, reply_markup=None):
     """Replace processing_msg with the final response (or send as new message if no processing_msg)."""
-    await send_long_message(update, processing_msg, response)
+    await send_long_message(update, processing_msg, response, reply_markup=reply_markup)
 
 
 async def typing_loop(update: Update, context: ContextTypes.DEFAULT_TYPE, stop_event: asyncio.Event):
@@ -291,7 +317,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 _update_session_state(state, new_session_id, get_manager())
 
         # Send text response (split if too long)
-        await finalize_response(update, processing_msg, response)
+        await finalize_response(update, processing_msg, response, reply_markup=_session_keyboard(response, user_id))
 
         # Generate and send voice response if audio enabled
         if settings["audio_enabled"]:
@@ -370,7 +396,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 _update_session_state(state, new_session_id, get_manager())
 
         # Send text response (split if too long)
-        await finalize_response(update, processing_msg, response)
+        await finalize_response(update, processing_msg, response, reply_markup=_session_keyboard(response, user_id))
 
         # Send voice response if audio enabled
         if settings["audio_enabled"]:
@@ -462,7 +488,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if new_session_id and new_session_id != state["current_session"]:
                 _update_session_state(state, new_session_id, get_manager())
 
-        await finalize_response(update, processing_msg, response)
+        await finalize_response(update, processing_msg, response, reply_markup=_session_keyboard(response, user_id))
 
         if settings["audio_enabled"]:
             tts_text = response[:MAX_VOICE_CHARS] if len(response) > MAX_VOICE_CHARS else response
