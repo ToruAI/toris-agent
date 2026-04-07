@@ -21,12 +21,13 @@ from state_manager import get_manager
 logger = logging.getLogger(__name__)
 
 
-def _get_session_first_prompt(session_id: str) -> "str | None":
-    """Return the first user message text from a Claude session JSONL file."""
+def _extract_session_messages(session_id: str, max_msgs: int = 6) -> list:
+    """Return up to max_msgs user message texts from a session JSONL file."""
     hashed = _cfg.SANDBOX_DIR.replace("/", "-")
     jsonl_path = Path.home() / ".claude" / "projects" / hashed / f"{session_id}.jsonl"
     if not jsonl_path.exists():
-        return None
+        return []
+    messages = []
     try:
         with open(jsonl_path) as f:
             for line in f:
@@ -35,17 +36,30 @@ def _get_session_first_prompt(session_id: str) -> "str | None":
                 except json.JSONDecodeError:
                     continue
                 msg = obj.get("message", {})
-                if msg.get("role") == "user":
-                    content = msg.get("content", "")
-                    if isinstance(content, list):
-                        for c in content:
-                            if isinstance(c, dict) and c.get("type") == "text":
-                                return c["text"]
-                    elif isinstance(content, str):
-                        return content
+                if msg.get("role") != "user":
+                    continue
+                content = msg.get("content", "")
+                text = None
+                if isinstance(content, list):
+                    for c in content:
+                        if isinstance(c, dict) and c.get("type") == "text":
+                            text = c["text"]
+                            break
+                elif isinstance(content, str):
+                    text = content
+                if text and text.strip():
+                    messages.append(text[:250])
+                    if len(messages) >= max_msgs:
+                        break
     except Exception:
         pass
-    return None
+    return messages
+
+
+def _get_session_first_prompt(session_id: str) -> "str | None":
+    """Return the first user message text from a Claude session JSONL file."""
+    msgs = _extract_session_messages(session_id, max_msgs=1)
+    return msgs[0] if msgs else None
 
 
 def parse_session_name(args: list) -> "str | None":
@@ -298,37 +312,29 @@ async def cmd_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     searching_msg = await update.message.reply_text("🔍 Searching sessions...")
 
-    # Sessions dir where JSONL files live
-    hashed = _cfg.SANDBOX_DIR.replace("/", "-")
-    sessions_dir = str(Path.home() / ".claude" / "projects" / hashed)
-    session_ids = list(reversed(sessions[-30:]))  # most recent first
-    names_json = json.dumps({sid: names.get(sid) for sid in session_ids}, ensure_ascii=False)
+    # Extract user messages from each session (Python-side, fast)
+    session_data = []
+    for sid in reversed(sessions[-30:]):
+        msgs = _extract_session_messages(sid, max_msgs=6)
+        session_data.append({
+            "id": sid,
+            "name": names.get(sid) or "",
+            "messages": msgs,
+        })
 
-    prompt = f"""Search through conversation session files and find sessions relevant to this query.
-
-Query: "{query}"
-
-Sessions directory: {sessions_dir}/
-Valid session IDs (most recent first): {json.dumps(session_ids)}
-Session names: {names_json}
-
-Each session is a .jsonl file named <session-id>.jsonl
-User messages in each file look like: {{"message": {{"role": "user", "content": "..."}}}}
-
-Instructions:
-1. Search the JSONL files for content relevant to the query — grep by keywords, read promising files
-2. Look at multiple messages per session, not just the first
-3. Rank by actual relevance to the query
-4. Return ONLY a JSON array of matching session IDs (the full UUIDs from the valid list), most relevant first, max 5
-5. If nothing is relevant return []
-
-Output format (nothing else): ["full-uuid-1", "full-uuid-2"]"""
+    sessions_json = json.dumps(session_data, ensure_ascii=False)
+    prompt = (
+        f'Find the most relevant sessions for this query: "{query}"\n\n'
+        f"Sessions (id + name + user messages sample):\n{sessions_json}\n\n"
+        "Return ONLY a JSON array of session IDs, most relevant first, max 5. "
+        'If nothing relevant return []. Example: ["full-uuid-1", "full-uuid-2"]'
+    )
 
     try:
         result = await asyncio.to_thread(
             subprocess.run,
-            ["claude", "-p", prompt, "--allowedTools", "Bash,Read", "--output-format", "json"],
-            capture_output=True, text=True, timeout=60,
+            ["claude", "-p", prompt, "--output-format", "json"],
+            capture_output=True, text=True, timeout=45,
             cwd=_cfg.CLAUDE_WORKING_DIR,
         )
         if result.returncode != 0:
