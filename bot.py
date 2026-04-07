@@ -11,10 +11,9 @@ import json
 import asyncio
 import logging
 from datetime import datetime
-from io import BytesIO
 from pathlib import Path
 from dotenv import load_dotenv
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ForceReply, BotCommand
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from telegram.constants import ChatAction
 from telegram.ext import (
     ApplicationBuilder,
@@ -316,8 +315,8 @@ def apply_saved_credentials():
         logger.debug("Applied saved OpenAI key")
 
     # Re-resolve providers after credentials are loaded
-    TTS_PROVIDER = resolve_provider("TTS_PROVIDER")
-    STT_PROVIDER = resolve_provider("STT_PROVIDER")
+    TTS_PROVIDER = _cfg.resolve_provider("TTS_PROVIDER")
+    STT_PROVIDER = _cfg.resolve_provider("STT_PROVIDER")
 
     # Sync voice_service clients
     voice_service.reconfigure(
@@ -1098,8 +1097,8 @@ async def cmd_openai_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Apply immediately
     os.environ["OPENAI_API_KEY"] = key
     openai_client = OpenAIClient(api_key=key)
-    TTS_PROVIDER = resolve_provider("TTS_PROVIDER")
-    STT_PROVIDER = resolve_provider("STT_PROVIDER")
+    TTS_PROVIDER = _cfg.resolve_provider("TTS_PROVIDER")
+    STT_PROVIDER = _cfg.resolve_provider("STT_PROVIDER")
     voice_service.reconfigure(openai_key=key, tts_provider=TTS_PROVIDER, stt_provider=STT_PROVIDER)
 
     await update.effective_chat.send_message(
@@ -1330,7 +1329,6 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 get_manager().save_state()
 
         # Send text response (split if too long)
-        tool_log = metadata.get("tool_log", [])
         await finalize_response(update, processing_msg, response)
 
         # Generate and send voice response if audio enabled
@@ -1415,7 +1413,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 get_manager().save_state()
 
         # Send text response (split if too long)
-        tool_log = metadata.get("tool_log", [])
         await finalize_response(update, processing_msg, response)
 
         # Send voice response if audio enabled
@@ -1515,7 +1512,6 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     state["sessions"].append(new_session_id)
                 get_manager().save_state()
 
-        tool_log = metadata.get("tool_log", [])
         await finalize_response(update, processing_msg, response)
 
         if settings["audio_enabled"]:
