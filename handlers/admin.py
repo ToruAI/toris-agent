@@ -146,7 +146,11 @@ async def cmd_claude_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await update.message.delete()
     except Exception as e:
-        logger.debug(f"Could not delete token message: {e}")
+        logger.warning(f"Could not delete token message: {e}")
+        await update.effective_chat.send_message(
+            "⚠️ Could not delete your message. Please delete it manually and consider rotating this token.",
+            message_thread_id=thread_id
+        )
 
     # Get token from args
     if not context.args:
@@ -197,7 +201,11 @@ async def cmd_elevenlabs_key(update: Update, context: ContextTypes.DEFAULT_TYPE)
     try:
         await update.message.delete()
     except Exception as e:
-        logger.debug(f"Could not delete key message: {e}")
+        logger.warning(f"Could not delete key message: {e}")
+        await update.effective_chat.send_message(
+            "⚠️ Could not delete your message. Please delete it manually and consider rotating this key.",
+            message_thread_id=thread_id
+        )
 
     # Get key from args
     if not context.args:
@@ -249,7 +257,11 @@ async def cmd_openai_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await update.message.delete()
     except Exception as e:
-        logger.debug(f"Could not delete key message: {e}")
+        logger.warning(f"Could not delete key message: {e}")
+        await update.effective_chat.send_message(
+            "⚠️ Could not delete your message. Please delete it manually and consider rotating this key.",
+            message_thread_id=thread_id
+        )
 
     if not context.args:
         await update.effective_chat.send_message(
@@ -294,6 +306,10 @@ async def handle_settings_callback(update: Update, context: ContextTypes.DEFAULT
     """Handle settings button callbacks."""
     query = update.callback_query
     logger.debug(f"SETTINGS CALLBACK received: {query.data} from user {update.effective_user.id}")
+
+    if not _is_authorized(update):
+        await query.answer()
+        return
 
     user_id = update.effective_user.id
     settings = get_manager().get_user_settings(user_id)

@@ -7,7 +7,10 @@ No bot globals — pure functions + subprocess calls.
 import asyncio
 import json
 import logging
+import re
 import subprocess
+
+_TRIGGER_ID_RE = re.compile(r'^[a-zA-Z0-9_\-]{1,64}$')
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
@@ -70,6 +73,9 @@ async def run_remote_trigger_list() -> list[dict]:
 
 async def run_remote_trigger_run(trigger_id: str) -> bool:
     """Trigger a scheduled task to run immediately via claude -p."""
+    if not _TRIGGER_ID_RE.match(trigger_id):
+        logger.warning(f"run_remote_trigger_run: invalid trigger_id format: {trigger_id!r}")
+        return False
     prompt = f"Run the scheduled remote trigger with ID '{trigger_id}' immediately using RemoteTrigger tool with action='run'."
     cmd = ["claude", "-p", prompt, "--allowedTools", "RemoteTrigger", "--output-format", "json"]
     try:
@@ -84,6 +90,9 @@ async def run_remote_trigger_run(trigger_id: str) -> bool:
 
 async def run_remote_trigger_toggle(trigger_id: str, enable: bool) -> bool:
     """Enable or disable a scheduled trigger via claude -p."""
+    if not _TRIGGER_ID_RE.match(trigger_id):
+        logger.warning(f"run_remote_trigger_toggle: invalid trigger_id format: {trigger_id!r}")
+        return False
     state = "enabled" if enable else "disabled"
     prompt = (
         f"Update the scheduled remote trigger with ID '{trigger_id}' using RemoteTrigger tool "
