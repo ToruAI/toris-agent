@@ -27,12 +27,8 @@ from telegram.ext import (
 from elevenlabs.client import ElevenLabs
 from openai import OpenAI as OpenAIClient
 from automations import (
-    cron_to_human,
     run_remote_trigger_list,
-    run_remote_trigger_run,
-    run_remote_trigger_toggle,
     build_automations_list,
-    build_automation_card,
 )
 import shared_state as _shared
 from state_manager import StateManager, get_manager
@@ -146,18 +142,12 @@ from handlers.messages import (
 )
 import voice_service
 from voice_service import (
-    transcribe_voice,
     is_valid_transcription,
-    text_to_speech,
     format_tts_fallback,
 )
 import claude_service
 from claude_service import (
-    call_claude,
     build_claude_options,
-    build_dynamic_prompt,
-    load_megg_context,
-    format_tool_call,
     WorkingIndicator,
 )
 TELEGRAM_BOT_TOKEN = _cfg.TELEGRAM_BOT_TOKEN
@@ -269,7 +259,8 @@ async def cmd_health(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status.append(f"TTS Provider: {TTS_PROVIDER}")
     if TTS_PROVIDER == "elevenlabs":
         try:
-            test_audio = elevenlabs.text_to_speech.convert(
+            test_audio = await asyncio.to_thread(
+                elevenlabs.text_to_speech.convert,
                 text="test",
                 voice_id=ELEVENLABS_VOICE_ID,
                 model_id="eleven_turbo_v2_5",
@@ -280,7 +271,8 @@ async def cmd_health(update: Update, context: ContextTypes.DEFAULT_TYPE):
             status.append(f"ElevenLabs TTS: FAILED - {e}")
     elif TTS_PROVIDER == "openai":
         try:
-            test_audio = openai_client.audio.speech.create(
+            test_audio = await asyncio.to_thread(
+                openai_client.audio.speech.create,
                 model=OPENAI_TTS_MODEL,
                 voice=OPENAI_VOICE_ID,
                 input="test",
