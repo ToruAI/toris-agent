@@ -11,11 +11,9 @@ import json
 import asyncio
 import logging
 import time
-from datetime import datetime
 from pathlib import Path
 from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
-from telegram.constants import ChatAction
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -169,14 +167,6 @@ OPENAI_STT_MODEL = _cfg.OPENAI_STT_MODEL
 # OpenAI client (None if no key configured)
 openai_client = OpenAIClient(api_key=_cfg.OPENAI_API_KEY) if _cfg.OPENAI_API_KEY else None
 
-# Voice settings for expressive delivery
-VOICE_SETTINGS = {
-    "stability": 0.3,           # More emotional range
-    "similarity_boost": 0.75,   # Good voice match
-    "style": 0.4,               # Some style exaggeration
-    "speed": 1.1,               # Slightly faster (range: 0.7-1.2)
-}
-
 # ElevenLabs client
 elevenlabs = ElevenLabs(api_key=ELEVENLABS_API_KEY)
 
@@ -215,17 +205,6 @@ def get_mcp_status(settings_file: str) -> list[str]:
         else:
             lines.append(f"  {name}: misconfigured (no command)")
     return lines
-
-
-def load_mcp_servers() -> dict:
-    """Read mcpServers from CLAUDE_SETTINGS_FILE for use in ClaudeAgentOptions.mcp_servers."""
-    if not CLAUDE_SETTINGS_FILE:
-        return {}
-    try:
-        data = json.loads(Path(CLAUDE_SETTINGS_FILE).read_text())
-        return data.get("mcpServers", {})
-    except (json.JSONDecodeError, IOError, OSError):
-        return {}
 
 
 # ============ Command Handlers ============
