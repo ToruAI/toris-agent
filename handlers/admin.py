@@ -148,9 +148,10 @@ async def cmd_claude_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.warning(f"Could not delete token message: {e}")
         await update.effective_chat.send_message(
-            "⚠️ Could not delete your message. Please delete it manually and consider rotating this token.",
+            "⚠️ Could not delete your message. Token NOT saved. Delete the message, rotate the token, and try again.",
             message_thread_id=thread_id
         )
+        return
 
     # Get token from args
     if not context.args:
@@ -203,9 +204,10 @@ async def cmd_elevenlabs_key(update: Update, context: ContextTypes.DEFAULT_TYPE)
     except Exception as e:
         logger.warning(f"Could not delete key message: {e}")
         await update.effective_chat.send_message(
-            "⚠️ Could not delete your message. Please delete it manually and consider rotating this key.",
+            "⚠️ Could not delete your message. Key NOT saved. Delete the message, rotate the key, and try again.",
             message_thread_id=thread_id
         )
+        return
 
     # Get key from args
     if not context.args:
@@ -259,9 +261,10 @@ async def cmd_openai_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.warning(f"Could not delete key message: {e}")
         await update.effective_chat.send_message(
-            "⚠️ Could not delete your message. Please delete it manually and consider rotating this key.",
+            "⚠️ Could not delete your message. Key NOT saved. Delete the message, rotate the key, and try again.",
             message_thread_id=thread_id
         )
+        return
 
     if not context.args:
         await update.effective_chat.send_message(
