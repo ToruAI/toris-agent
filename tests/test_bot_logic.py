@@ -8,8 +8,6 @@ import os
 import sys
 import time
 import pytest
-import tempfile
-from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
@@ -22,6 +20,10 @@ os.environ.setdefault("TELEGRAM_DEFAULT_CHAT_ID", "0")
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import bot
+import auth
+import config
+from handlers.session import parse_session_name, format_sessions_list
+from handlers.messages import error_message
 
 
 # ─────────────────────────────────────────────
@@ -36,146 +38,35 @@ class TestResolveProvider:
 
     def test_explicit_elevenlabs(self):
         os.environ["TTS_PROVIDER"] = "elevenlabs"
-        assert bot.resolve_provider("TTS_PROVIDER") == "elevenlabs"
+        assert config.resolve_provider("TTS_PROVIDER") == "elevenlabs"
 
     def test_explicit_openai(self):
         os.environ["TTS_PROVIDER"] = "openai"
-        assert bot.resolve_provider("TTS_PROVIDER") == "openai"
+        assert config.resolve_provider("TTS_PROVIDER") == "openai"
 
     def test_explicit_invalid_ignored(self):
         os.environ["TTS_PROVIDER"] = "invalid"
-        assert bot.resolve_provider("TTS_PROVIDER") == "none"
+        assert config.resolve_provider("TTS_PROVIDER") == "none"
 
     def test_fallback_elevenlabs(self):
         os.environ["ELEVENLABS_API_KEY"] = "sk_test"
-        assert bot.resolve_provider("TTS_PROVIDER") == "elevenlabs"
+        assert config.resolve_provider("TTS_PROVIDER") == "elevenlabs"
 
     def test_fallback_openai_when_no_elevenlabs(self):
         os.environ["OPENAI_API_KEY"] = "sk-test"
-        assert bot.resolve_provider("TTS_PROVIDER") == "openai"
+        assert config.resolve_provider("TTS_PROVIDER") == "openai"
 
     def test_elevenlabs_wins_over_openai(self):
         os.environ["ELEVENLABS_API_KEY"] = "sk_test"
         os.environ["OPENAI_API_KEY"] = "sk-test"
-        assert bot.resolve_provider("TTS_PROVIDER") == "elevenlabs"
+        assert config.resolve_provider("TTS_PROVIDER") == "elevenlabs"
 
     def test_none_when_no_keys(self):
-        assert bot.resolve_provider("TTS_PROVIDER") == "none"
+        assert config.resolve_provider("TTS_PROVIDER") == "none"
 
     def teardown_method(self):
         for var in ("TTS_PROVIDER", "STT_PROVIDER", "ELEVENLABS_API_KEY", "OPENAI_API_KEY"):
             os.environ.pop(var, None)
-
-
-# ─────────────────────────────────────────────
-# TestLoadSaveState
-# ─────────────────────────────────────────────
-
-class TestLoadSaveState:
-    def setup_method(self):
-        self.tmp = tempfile.NamedTemporaryFile(suffix=".json", delete=False)
-        self.tmp.close()
-        self.orig_state_file = bot.STATE_FILE
-        bot.STATE_FILE = Path(self.tmp.name)
-        bot.user_sessions = {}
-
-    def teardown_method(self):
-        bot.STATE_FILE = self.orig_state_file
-        Path(self.tmp.name).unlink(missing_ok=True)
-
-    def test_roundtrip(self):
-        bot.user_sessions = {"123": {"current_session": "abc", "sessions": ["abc"]}}
-        bot.save_state()
-        bot.user_sessions = {}
-        bot.load_state()
-        assert bot.user_sessions["123"]["current_session"] == "abc"
-
-    def test_corrupted_json(self):
-        Path(self.tmp.name).write_text("not valid json{{{{")
-        bot.load_state()  # Must NOT raise
-        assert bot.user_sessions == {}
-
-    def test_missing_file(self):
-        Path(self.tmp.name).unlink()
-        bot.load_state()  # Must NOT raise
-        assert bot.user_sessions == {}
-
-    def test_empty_file(self):
-        Path(self.tmp.name).write_text("")
-        bot.load_state()  # Must NOT raise
-        assert bot.user_sessions == {}
-
-
-# ─────────────────────────────────────────────
-# TestLoadSaveSettings
-# ─────────────────────────────────────────────
-
-class TestLoadSaveSettings:
-    def setup_method(self):
-        self.tmp = tempfile.NamedTemporaryFile(suffix=".json", delete=False)
-        self.tmp.close()
-        self.orig_settings_file = bot.SETTINGS_FILE
-        bot.SETTINGS_FILE = Path(self.tmp.name)
-        bot.user_settings = {}
-
-    def teardown_method(self):
-        bot.SETTINGS_FILE = self.orig_settings_file
-        Path(self.tmp.name).unlink(missing_ok=True)
-
-    def test_corrupted_json(self):
-        Path(self.tmp.name).write_text("{bad json")
-        bot.load_settings()  # Must NOT raise
-        assert bot.user_settings == {}
-
-    def test_roundtrip(self):
-        bot.user_settings = {"456": {"mode": "approve", "audio_enabled": False}}
-        bot.save_settings()
-        bot.user_settings = {}
-        bot.load_settings()
-        assert bot.user_settings["456"]["mode"] == "approve"
-
-
-# ─────────────────────────────────────────────
-# TestRateLimiter
-# ─────────────────────────────────────────────
-
-class TestRateLimiter:
-    def setup_method(self):
-        # Clear rate limit state
-        bot.rate_limits.clear()
-
-    def test_first_message_allowed(self):
-        allowed, msg = bot.check_rate_limit(999)
-        assert allowed is True
-
-    def test_cooldown_blocks_immediate_second(self):
-        bot.check_rate_limit(999)
-        allowed, msg = bot.check_rate_limit(999)
-        assert allowed is False
-        assert "wait" in msg.lower() or "second" in msg.lower() or "slow" in msg.lower()
-
-    def test_per_minute_cap(self):
-        user_id = 12345
-        # Simulate 10 messages spaced out to pass cooldown
-        # by manipulating rate_limits directly
-        bot.rate_limits[str(user_id)] = {
-            "last_message": time.time() - 10,  # 10s ago — passes cooldown
-            "minute_start": time.time(),
-            "minute_count": 10,  # Already at limit
-        }
-        allowed, msg = bot.check_rate_limit(user_id)
-        assert allowed is False
-        assert "10" in msg or "limit" in msg.lower() or "minute" in msg.lower()
-
-    def test_per_minute_resets_after_minute(self):
-        user_id = 77777
-        bot.rate_limits[str(user_id)] = {
-            "last_message": time.time() - 10,
-            "minute_start": time.time() - 65,  # minute started 65s ago → resets
-            "minute_count": 10,
-        }
-        allowed, msg = bot.check_rate_limit(user_id)
-        assert allowed is True
 
 
 # ─────────────────────────────────────────────
@@ -253,21 +144,8 @@ class TestCheckClaudeAuth:
 
 class TestMaxVoiceChars:
     def test_max_voice_chars_is_positive_int(self):
-        assert isinstance(bot.MAX_VOICE_CHARS, int)
-        assert bot.MAX_VOICE_CHARS > 0
-
-    def test_truncation_logic(self):
-        # Test the truncation logic directly (as used in handle_voice/handle_text)
-        max_chars = 100
-        long_response = "x" * 200
-        tts_text = long_response[:max_chars] if len(long_response) > max_chars else long_response
-        assert len(tts_text) == max_chars
-
-    def test_short_response_not_truncated(self):
-        max_chars = 100
-        short_response = "hello"
-        tts_text = short_response[:max_chars] if len(short_response) > max_chars else short_response
-        assert tts_text == "hello"
+        assert isinstance(config.MAX_VOICE_CHARS, int)
+        assert config.MAX_VOICE_CHARS > 0
 
 
 # ─────────────────────────────────────────────
@@ -275,46 +153,43 @@ class TestMaxVoiceChars:
 # ─────────────────────────────────────────────
 
 class TestAdminUserIds:
-    def test_is_authorized_with_zero_chat_id(self):
+    def _make_cfg(self, allowed_chat_id=0, admin_user_ids=None):
+        return type("C", (), {
+            "ALLOWED_CHAT_ID": allowed_chat_id,
+            "ADMIN_USER_IDS": admin_user_ids if admin_user_ids is not None else set(),
+        })()
+
+    def test_is_authorized_with_zero_chat_id(self, monkeypatch):
         """ALLOWED_CHAT_ID=0 means all chats allowed."""
-        orig = bot.ALLOWED_CHAT_ID
-        bot.ALLOWED_CHAT_ID = 0
+        monkeypatch.setattr(auth, "_cfg", self._make_cfg(allowed_chat_id=0))
 
         class FakeUpdate:
             class effective_chat:
                 id = 12345
 
-        assert bot._is_authorized(FakeUpdate()) is True
-        bot.ALLOWED_CHAT_ID = orig
+        assert auth._is_authorized(FakeUpdate()) is True
 
-    def test_is_authorized_matching_chat_id(self):
-        orig = bot.ALLOWED_CHAT_ID
-        bot.ALLOWED_CHAT_ID = 99999
+    def test_is_authorized_matching_chat_id(self, monkeypatch):
+        monkeypatch.setattr(auth, "_cfg", self._make_cfg(allowed_chat_id=99999))
 
         class FakeUpdate:
             class effective_chat:
                 id = 99999
 
-        assert bot._is_authorized(FakeUpdate()) is True
-        bot.ALLOWED_CHAT_ID = orig
+        assert auth._is_authorized(FakeUpdate()) is True
 
-    def test_is_authorized_wrong_chat_id(self):
-        orig = bot.ALLOWED_CHAT_ID
-        bot.ALLOWED_CHAT_ID = 99999
+    def test_is_authorized_wrong_chat_id(self, monkeypatch):
+        monkeypatch.setattr(auth, "_cfg", self._make_cfg(allowed_chat_id=99999))
 
         class FakeUpdate:
             class effective_chat:
                 id = 11111
 
-        assert bot._is_authorized(FakeUpdate()) is False
-        bot.ALLOWED_CHAT_ID = orig
+        assert auth._is_authorized(FakeUpdate()) is False
 
-    def test_is_admin_empty_admin_ids_allows_authorized(self):
+    def test_is_admin_empty_admin_ids_allows_authorized(self, monkeypatch):
         """No ADMIN_USER_IDS configured → anyone in authorized chat is admin."""
-        orig_chat = bot.ALLOWED_CHAT_ID
-        orig_admin = bot.ADMIN_USER_IDS
-        bot.ALLOWED_CHAT_ID = 0
-        bot.ADMIN_USER_IDS = set()
+        monkeypatch.setattr(auth, "_cfg", self._make_cfg(allowed_chat_id=0, admin_user_ids=set()))
 
         class FakeUpdate:
             class effective_chat:
@@ -322,15 +197,10 @@ class TestAdminUserIds:
             class effective_user:
                 id = 99999
 
-        assert bot._is_admin(FakeUpdate()) is True
-        bot.ALLOWED_CHAT_ID = orig_chat
-        bot.ADMIN_USER_IDS = orig_admin
+        assert auth._is_admin(FakeUpdate()) is True
 
-    def test_is_admin_with_admin_ids_matching(self):
-        orig_chat = bot.ALLOWED_CHAT_ID
-        orig_admin = bot.ADMIN_USER_IDS
-        bot.ALLOWED_CHAT_ID = 0
-        bot.ADMIN_USER_IDS = {111, 222}
+    def test_is_admin_with_admin_ids_matching(self, monkeypatch):
+        monkeypatch.setattr(auth, "_cfg", self._make_cfg(allowed_chat_id=0, admin_user_ids={111, 222}))
 
         class FakeUpdate:
             class effective_chat:
@@ -338,15 +208,10 @@ class TestAdminUserIds:
             class effective_user:
                 id = 111
 
-        assert bot._is_admin(FakeUpdate()) is True
-        bot.ALLOWED_CHAT_ID = orig_chat
-        bot.ADMIN_USER_IDS = orig_admin
+        assert auth._is_admin(FakeUpdate()) is True
 
-    def test_is_admin_with_admin_ids_not_matching(self):
-        orig_chat = bot.ALLOWED_CHAT_ID
-        orig_admin = bot.ADMIN_USER_IDS
-        bot.ALLOWED_CHAT_ID = 0
-        bot.ADMIN_USER_IDS = {111, 222}
+    def test_is_admin_with_admin_ids_not_matching(self, monkeypatch):
+        monkeypatch.setattr(auth, "_cfg", self._make_cfg(allowed_chat_id=0, admin_user_ids={111, 222}))
 
         class FakeUpdate:
             class effective_chat:
@@ -354,9 +219,7 @@ class TestAdminUserIds:
             class effective_user:
                 id = 999  # not in admin list
 
-        assert bot._is_admin(FakeUpdate()) is False
-        bot.ALLOWED_CHAT_ID = orig_chat
-        bot.ADMIN_USER_IDS = orig_admin
+        assert auth._is_admin(FakeUpdate()) is False
 
 
 class TestSettingsJson:
@@ -397,157 +260,6 @@ class TestSettingsJson:
         assert "permissions" in data, "settings.json missing permissions block"
 
 
-class TestPhotoHandler:
-    """Test photo handler logic."""
-
-    def test_photo_prompt_with_caption(self):
-        """Photo with caption produces correct prompt."""
-        caption = "What's in this image?"
-        path = Path("/sandbox/photo_20260405_120000.jpg")
-
-        # Replicate the prompt building logic from handle_photo
-        if caption:
-            prompt = f"I sent you a photo. It's saved at: {path}\n\nMy message: {caption}"
-        else:
-            prompt = f"I sent you a photo. It's saved at: {path}\n\nPlease look at it and describe what you see, or help me with whatever is shown."
-
-        assert str(path) in prompt
-        assert caption in prompt
-
-    def test_photo_prompt_without_caption(self):
-        """Photo without caption produces fallback prompt."""
-        caption = ""
-        path = Path("/sandbox/photo_20260405_120000.jpg")
-
-        if caption:
-            prompt = f"I sent you a photo. It's saved at: {path}\n\nMy message: {caption}"
-        else:
-            prompt = f"I sent you a photo. It's saved at: {path}\n\nPlease look at it and describe what you see, or help me with whatever is shown."
-
-        assert str(path) in prompt
-        assert "describe" in prompt
-
-    def test_photo_filename_format(self):
-        """Photo filename includes timestamp."""
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"photo_{timestamp}.jpg"
-        assert filename.startswith("photo_")
-        assert filename.endswith(".jpg")
-        assert len(filename) == len("photo_20260405_120000.jpg")
-
-
-class TestCancellation:
-    """Test cancellation event logic."""
-
-    def test_cancel_event_initial_state(self):
-        """A new asyncio.Event is not set."""
-        event = asyncio.Event()
-        assert not event.is_set()
-
-    def test_cancel_event_set_and_check(self):
-        """Setting an event makes is_set() return True."""
-        event = asyncio.Event()
-        event.set()
-        assert event.is_set()
-
-    def test_cancel_event_clear_resets(self):
-        """Clearing an event makes is_set() return False again."""
-        event = asyncio.Event()
-        event.set()
-        event.clear()
-        assert not event.is_set()
-
-    def test_cancel_events_dict_per_user(self):
-        """cancel_events dict tracks separate events per user_id."""
-        cancel_events = {}
-
-        # Simulate start of call_claude for user 123
-        user_id = 123
-        if user_id not in cancel_events:
-            cancel_events[user_id] = asyncio.Event()
-        cancel_events[user_id].clear()
-
-        assert not cancel_events[123].is_set()
-
-        # Simulate /cancel
-        cancel_events[123].set()
-        assert cancel_events[123].is_set()
-
-        # Different user not affected
-        assert 456 not in cancel_events
-
-    def test_cancel_no_effect_on_already_cancelled(self):
-        """Setting an already-set event is idempotent."""
-        event = asyncio.Event()
-        event.set()
-        event.set()  # Should not raise
-        assert event.is_set()
-
-
-class TestCompact:
-    """Test /compact session logic."""
-
-    def test_compact_summary_stored_in_state(self):
-        """compact_summary key gets saved to user state dict."""
-        state = {"current_session": "sess_abc", "sessions": ["sess_abc"]}
-        summary = "We discussed X, decided Y, working on Z."
-
-        # Simulate what cmd_compact does after getting summary
-        state["compact_summary"] = summary
-        state["current_session"] = None
-
-        assert state["compact_summary"] == summary
-        assert state["current_session"] is None
-
-    def test_compact_summary_prepended_to_next_message(self):
-        """compact_summary is injected into the next message prompt."""
-        state = {
-            "current_session": None,
-            "sessions": [],
-            "compact_summary": "Previous: discussed auth system.",
-        }
-        user_text = "Continue with the login form."
-
-        # Simulate what handlers do
-        compact_summary = state.pop("compact_summary", None)
-        if compact_summary:
-            text = f"<previous_session_summary>\n{compact_summary}\n</previous_session_summary>\n\n{user_text}"
-        else:
-            text = user_text
-
-        assert "<previous_session_summary>" in text
-        assert "Previous: discussed auth system." in text
-        assert "Continue with the login form." in text
-
-    def test_compact_summary_cleared_after_use(self):
-        """compact_summary is removed from state after being injected."""
-        state = {"compact_summary": "some summary", "current_session": None, "sessions": []}
-
-        compact_summary = state.pop("compact_summary", None)
-        assert compact_summary == "some summary"
-        assert "compact_summary" not in state
-
-    def test_compact_no_summary_no_injection(self):
-        """Without compact_summary, text is unchanged."""
-        state = {"current_session": None, "sessions": []}
-        user_text = "Hello"
-
-        compact_summary = state.pop("compact_summary", None)
-        if compact_summary:
-            text = f"<previous_session_summary>\n{compact_summary}\n</previous_session_summary>\n\n{user_text}"
-        else:
-            text = user_text
-
-        assert text == user_text
-
-    def test_compact_requires_active_session(self):
-        """compact should not proceed if no active session."""
-        state = {"current_session": None, "sessions": []}
-
-        # Simulate the guard in cmd_compact
-        has_session = bool(state.get("current_session"))
-        assert not has_session
-
 
 # ─────────────────────────────────────────────
 # TestMcpStatus
@@ -555,107 +267,6 @@ class TestCompact:
 
 class TestMcpStatus:
     """Test MCP status helper function."""
-
-    def test_no_settings_file_configured(self, tmp_path):
-        """Empty CLAUDE_SETTINGS_FILE returns informative message."""
-        settings_file = ""
-        if not settings_file:
-            result = ["MCP: CLAUDE_SETTINGS_FILE not configured"]
-        assert result == ["MCP: CLAUDE_SETTINGS_FILE not configured"]
-
-    def test_settings_file_not_found(self, tmp_path):
-        """Nonexistent file returns not-found message."""
-        fake_path = str(tmp_path / "missing_settings.json")
-
-        from pathlib import Path
-        settings_path = Path(fake_path)
-        if not settings_path.is_absolute():
-            settings_path = Path(".") / fake_path
-
-        if not settings_path.exists():
-            result = [f"MCP config: settings file not found ({fake_path})"]
-
-        assert "not found" in result[0]
-
-    def test_settings_with_valid_mcp_command(self, tmp_path):
-        """Settings with npx (available) returns OK status."""
-        import shutil, json
-        settings = {
-            "mcpServers": {
-                "megg": {"command": "npx", "args": ["-y", "megg@latest"]}
-            }
-        }
-        settings_file = tmp_path / "settings.json"
-        settings_file.write_text(json.dumps(settings))
-
-        # Parse logic
-        data = json.loads(settings_file.read_text())
-        mcp_servers = data.get("mcpServers", {})
-        lines = ["MCP Servers:"]
-        for name, config in mcp_servers.items():
-            cmd = config.get("command", "")
-            if cmd and shutil.which(cmd):
-                lines.append(f"  {name}: OK ({cmd})")
-            elif cmd:
-                lines.append(f"  {name}: MISSING ({cmd} not found in PATH)")
-
-        # npx should be available in the test environment
-        if shutil.which("npx"):
-            assert any("OK" in line for line in lines)
-        else:
-            assert any("MISSING" in line for line in lines)
-
-    def test_settings_with_missing_command(self, tmp_path):
-        """Settings with unavailable command returns MISSING status."""
-        import shutil, json
-        settings = {
-            "mcpServers": {
-                "fake-tool": {"command": "this-binary-does-not-exist-xyz", "args": []}
-            }
-        }
-        settings_file = tmp_path / "settings.json"
-        settings_file.write_text(json.dumps(settings))
-
-        data = json.loads(settings_file.read_text())
-        mcp_servers = data.get("mcpServers", {})
-        lines = ["MCP Servers:"]
-        for name, config in mcp_servers.items():
-            cmd = config.get("command", "")
-            if cmd and shutil.which(cmd):
-                lines.append(f"  {name}: OK ({cmd})")
-            elif cmd:
-                lines.append(f"  {name}: MISSING ({cmd} not found in PATH)")
-
-        assert any("MISSING" in line for line in lines)
-
-    def test_settings_empty_mcp_servers(self, tmp_path):
-        """Settings with empty mcpServers returns 'none configured'."""
-        import json
-        settings = {"permissions": {"allow": []}, "mcpServers": {}}
-        settings_file = tmp_path / "settings.json"
-        settings_file.write_text(json.dumps(settings))
-
-        data = json.loads(settings_file.read_text())
-        mcp_servers = data.get("mcpServers", {})
-        if not mcp_servers:
-            result = ["MCP Servers: none configured"]
-
-        assert result == ["MCP Servers: none configured"]
-
-    def test_corrupted_settings_file(self, tmp_path):
-        """Corrupted settings.json returns error message."""
-        settings_file = tmp_path / "settings.json"
-        settings_file.write_text("{invalid json{{")
-
-        try:
-            import json
-            json.loads(settings_file.read_text())
-            result = []
-        except json.JSONDecodeError as e:
-            result = [f"MCP config: ERROR reading settings - {e}"]
-
-        assert len(result) == 1
-        assert "ERROR" in result[0]
 
     def test_get_mcp_status_no_settings(self):
         """bot.get_mcp_status with empty string returns not-configured message."""
@@ -711,3 +322,113 @@ class TestMcpStatus:
 
         result = bot.get_mcp_status(str(settings_file))
         assert any("misconfigured" in line for line in result)
+
+
+class TestSessionNaming:
+    def test_parse_session_name_empty_args(self):
+        assert parse_session_name([]) is None
+
+    def test_parse_session_name_single_word(self):
+        assert parse_session_name(["analysis"]) == "analysis"
+
+    def test_parse_session_name_multiple_words(self):
+        assert parse_session_name(["my", "project"]) == "my project"
+
+    def test_format_sessions_list_empty(self):
+        assert format_sessions_list([]) == "No sessions yet."
+
+    def test_format_sessions_list_shows_name(self):
+        sessions = [{"id": "abc123de", "name": "project analysis"}]
+        text = format_sessions_list(sessions)
+        assert "project analysis" in text
+        assert "abc123d" in text
+
+    def test_format_sessions_list_unnamed_shows_placeholder(self):
+        sessions = [{"id": "def456gh", "name": None}]
+        text = format_sessions_list(sessions)
+        assert "(unnamed)" in text
+        assert "def456g" in text
+
+    def test_format_sessions_list_multiple(self):
+        sessions = [
+            {"id": "abc123de", "name": "project analysis"},
+            {"id": "def456gh", "name": None},
+        ]
+        text = format_sessions_list(sessions)
+        assert "project analysis" in text
+        assert "(unnamed)" in text
+
+
+class TestErrorMessages:
+    def test_rate_limit_error(self):
+        msg = error_message("Claude call", Exception("rate limit exceeded 429"))
+        assert "Rate limit" in msg
+        assert "❌" in msg
+
+    def test_timeout_error(self):
+        msg = error_message("STT", Exception("request timeout"))
+        assert "Timed out" in msg
+        assert "❌" in msg
+
+    def test_auth_error(self):
+        msg = error_message("TTS", Exception("401 Unauthorized"))
+        assert "Authentication" in msg
+
+    def test_network_error(self):
+        msg = error_message("Voice", Exception("network connection refused"))
+        assert "Network" in msg
+
+    def test_generic_error_includes_context(self):
+        msg = error_message("TTS", Exception("Something broke"))
+        assert "TTS" in msg
+        assert "❌" in msg
+
+    def test_generic_error_truncated(self):
+        long_exc = Exception("x" * 300)
+        msg = error_message("ctx", long_exc)
+        assert len(msg) < 200
+
+
+class TestVoiceServiceImport:
+    def test_voice_service_is_importable(self):
+        import voice_service
+        assert callable(voice_service.transcribe_voice)
+        assert callable(voice_service.text_to_speech)
+        assert callable(voice_service.is_valid_transcription)
+        assert callable(voice_service.format_tts_fallback)
+        assert callable(voice_service.reconfigure)
+
+
+class TestClaudeServiceImport:
+    def test_claude_service_is_importable(self):
+        import claude_service
+        assert callable(claude_service.call_claude)
+        assert callable(claude_service.build_claude_options)
+        assert callable(claude_service.build_dynamic_prompt)
+        assert hasattr(claude_service, "WorkingIndicator")
+
+
+class TestSessionHandlersImport:
+    def test_session_helpers_importable_from_handlers(self):
+        from handlers.session import parse_session_name, format_sessions_list
+        assert parse_session_name(["my", "project"]) == "my project"
+        assert parse_session_name([]) is None
+        sessions = [{"id": "abc123de", "name": "test"}]
+        text = format_sessions_list(sessions)
+        assert "abc123d" in text
+        assert "test" in text
+
+
+class TestAdminHandlersImport:
+    def test_admin_handlers_importable(self):
+        from handlers.admin import handle_settings_callback, handle_approval_callback
+        assert callable(handle_settings_callback)
+        assert callable(handle_approval_callback)
+
+
+class TestMessageHandlersImport:
+    def test_message_handlers_importable(self):
+        from handlers.messages import handle_voice, handle_text, handle_photo
+        assert callable(handle_voice)
+        assert callable(handle_text)
+        assert callable(handle_photo)

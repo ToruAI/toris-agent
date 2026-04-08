@@ -43,7 +43,9 @@ RUN python3 -m venv .venv && \
     .venv/bin/pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
-COPY --chown=claude:claude bot.py .
+COPY --chown=claude:claude bot.py auth.py config.py state_manager.py shared_state.py \
+     claude_service.py voice_service.py automations.py ./
+COPY --chown=claude:claude handlers/ ./handlers/
 COPY --chown=claude:claude prompts/ ./prompts/
 
 # Copy Claude settings (agents, skills, config from toru-claude-settings submodule)
