@@ -246,8 +246,7 @@ async def handle_unknown_command(update: Update, context: ContextTypes.DEFAULT_T
         return
     cmd = update.message.text.split()[0]
     await update.message.reply_text(
-        f"Unknown command: `{cmd}`\n\nType /start to see all available commands.",
-        parse_mode="Markdown"
+        f"Unknown command: {cmd}\n\nType /start to see all available commands."
     )
 
 
@@ -463,8 +462,9 @@ def main():
             BotCommand("status",   "Current session info"),
             BotCommand("settings",    "Voice, mode & speed settings"),
             BotCommand("health",   "Check bot & API status"),
-            BotCommand("setup",    "Configure API tokens"),
-            BotCommand("start",    "Show help"),
+            BotCommand("setup",       "Configure API tokens"),
+            BotCommand("automations", "Manage scheduled automations"),
+            BotCommand("start",       "Show help"),
         ])
     app.post_init = post_init
 

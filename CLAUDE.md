@@ -18,7 +18,7 @@ Run with: `source venv/bin/activate && pytest tests/ -v`
 ## Architecture
 
 - `bot.py` — handler registration + startup only (~470 lines)
-- `handlers/session.py` — /start /new /cancel /compact /continue /sessions /switch /status
+- `handlers/session.py` — /start /new /cancel /compact /continue /sessions /switch /status /search
 - `handlers/admin.py` — /setup /claude_token /elevenlabs_key /openai_key + settings + approval callbacks
 - `handlers/messages.py` — voice / text / photo / automations callbacks
 - `auth.py` — guards: should_handle_message, _is_authorized, _is_admin, check_rate_limit

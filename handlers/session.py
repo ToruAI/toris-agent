@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 def _extract_session_messages(session_id: str, max_msgs: int = 6) -> list:
     """Return up to max_msgs user message texts from a session JSONL file."""
-    hashed = _cfg.SANDBOX_DIR.replace("/", "-")
+    hashed = str(Path(_cfg.SANDBOX_DIR).resolve()).replace("/", "-")
     jsonl_path = Path.home() / ".claude" / "projects" / hashed / f"{session_id}.jsonl"
     if not jsonl_path.exists():
         return []
@@ -93,9 +93,12 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Commands:\n"
         "/setup - Configure API credentials\n"
         "/new [name] - Start new session\n"
+        "/cancel - Cancel active request\n"
+        "/compact - Summarize & compress session\n"
         "/continue - Resume last session\n"
         "/sessions - List all sessions\n"
-        "/switch <name> - Switch to session\n"
+        "/search <query> - Find sessions by content\n"
+        "/switch <id prefix> - Switch to session\n"
         "/status - Current session info\n"
         "/settings - Configure audio and voice speed\n"
         "/health - Check Claude, STT, TTS status"
@@ -310,7 +313,7 @@ async def cmd_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("No sessions yet.")
         return
 
-    searching_msg = await update.message.reply_text("🔍 Searching sessions...")
+    searching_msg = await update.message.reply_text("🔍 Asking Claude to search sessions... (up to 45s)")
 
     # Extract user messages from each session (Python-side, fast)
     session_data = []
@@ -342,13 +345,20 @@ async def cmd_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         outer = json.loads(result.stdout)
-        raw_result = outer.get("result", "")
-        start = raw_result.find("[")
-        end = raw_result.rfind("]") + 1
-        if start == -1 or end == 0:
-            await searching_msg.edit_text("No sessions found.")
-            return
-        matched_ids = json.loads(raw_result[start:end])
+        raw_result = str(outer.get("result", ""))
+        # Try direct parse first (handles clean responses)
+        try:
+            matched_ids = json.loads(raw_result)
+            if not isinstance(matched_ids, list):
+                raise ValueError("not a list")
+        except (json.JSONDecodeError, ValueError):
+            # Fall back to extracting [...] slice
+            start = raw_result.find("[")
+            end = raw_result.find("]", start) + 1 if start != -1 else 0
+            if start == -1 or end == 0:
+                await searching_msg.edit_text("No sessions found.")
+                return
+            matched_ids = json.loads(raw_result[start:end])
     except Exception as e:
         logger.error(f"cmd_search error: {e}")
         await searching_msg.edit_text(f"Search error: {e}")
@@ -371,7 +381,8 @@ async def cmd_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
         name_part = f" — {name}" if name else ""
         lines.append(f"`{sid[:8]}`{name_part}")
         if excerpt:
-            lines.append(f"_{excerpt}_\n")
+            safe_excerpt = excerpt.replace("_", "\\_").replace("*", "\\*").replace("`", "\\`")
+            lines.append(f"_{safe_excerpt}_\n")
         label = name or (excerpt[:45].rstrip() + "…" if len(excerpt) > 45 else excerpt) or sid[:8]
         buttons.append([InlineKeyboardButton(f"↩ {label}", callback_data=f"sess_switch_{sid}")])
 
