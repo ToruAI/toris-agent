@@ -31,14 +31,16 @@ class TestSendLongMessage:
         update = _make_update()
         first_msg = AsyncMock()
         asyncio.run(send_long_message(update, first_msg, "Hello world"))
-        first_msg.edit_text.assert_called_once_with("Hello world")
+        assert first_msg.edit_text.call_count == 1
+        assert first_msg.edit_text.call_args.args[0] == "Hello world"
         update.message.reply_text.assert_not_called()
 
     def test_short_text_replies_when_no_first_msg(self):
         """When first_msg is None, short text is sent as a new reply."""
         update = _make_update()
         asyncio.run(send_long_message(update, None, "Hello"))
-        update.message.reply_text.assert_called_once_with("Hello")
+        assert update.message.reply_text.call_count == 1
+        assert update.message.reply_text.call_args.args[0] == "Hello"
 
     def test_long_text_edits_first_chunk_then_replies(self):
         """Long text: first chunk goes to first_msg.edit_text, rest to reply_text."""

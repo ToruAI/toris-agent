@@ -453,8 +453,8 @@ class TestClaudeTimeout:
         monkeypatch.setenv("CLAUDE_TIMEOUT", "120")
         import importlib
         importlib.reload(config)
-        importlib.reload(bot)
         assert config.CLAUDE_TIMEOUT == 120
+        importlib.reload(config)  # restore to original env state
 
 
 class TestWorkingIndicator:
