@@ -48,3 +48,4 @@ See the spec-writing skill or any existing spec in this directory.
 | INF-002 | Authorization | active |
 | INF-003 | Credential management | active |
 | INF-004 | Health check | active |
+| FEA-007 | Session search (/search command) | active |
