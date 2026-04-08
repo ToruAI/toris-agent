@@ -8,7 +8,6 @@ import os
 import sys
 import time
 import pytest
-from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
@@ -68,49 +67,6 @@ class TestResolveProvider:
     def teardown_method(self):
         for var in ("TTS_PROVIDER", "STT_PROVIDER", "ELEVENLABS_API_KEY", "OPENAI_API_KEY"):
             os.environ.pop(var, None)
-
-
-# ─────────────────────────────────────────────
-# TestRateLimiter
-# ─────────────────────────────────────────────
-
-class TestRateLimiter:
-    def setup_method(self):
-        # Clear rate limit state
-        bot.rate_limits.clear()
-
-    def test_first_message_allowed(self):
-        allowed, msg = bot.check_rate_limit(999)
-        assert allowed is True
-
-    def test_cooldown_blocks_immediate_second(self):
-        bot.check_rate_limit(999)
-        allowed, msg = bot.check_rate_limit(999)
-        assert allowed is False
-        assert "wait" in msg.lower() or "second" in msg.lower() or "slow" in msg.lower()
-
-    def test_per_minute_cap(self):
-        user_id = 12345
-        # Simulate 10 messages spaced out to pass cooldown
-        # by manipulating rate_limits directly
-        bot.rate_limits[str(user_id)] = {
-            "last_message": time.time() - 10,  # 10s ago — passes cooldown
-            "minute_start": time.time(),
-            "minute_count": 10,  # Already at limit
-        }
-        allowed, msg = bot.check_rate_limit(user_id)
-        assert allowed is False
-        assert "10" in msg or "limit" in msg.lower() or "minute" in msg.lower()
-
-    def test_per_minute_resets_after_minute(self):
-        user_id = 77777
-        bot.rate_limits[str(user_id)] = {
-            "last_message": time.time() - 10,
-            "minute_start": time.time() - 65,  # minute started 65s ago → resets
-            "minute_count": 10,
-        }
-        allowed, msg = bot.check_rate_limit(user_id)
-        assert allowed is True
 
 
 # ─────────────────────────────────────────────
@@ -190,19 +146,6 @@ class TestMaxVoiceChars:
     def test_max_voice_chars_is_positive_int(self):
         assert isinstance(config.MAX_VOICE_CHARS, int)
         assert config.MAX_VOICE_CHARS > 0
-
-    def test_truncation_logic(self):
-        # Test the truncation logic directly (as used in handle_voice/handle_text)
-        max_chars = 100
-        long_response = "x" * 200
-        tts_text = long_response[:max_chars] if len(long_response) > max_chars else long_response
-        assert len(tts_text) == max_chars
-
-    def test_short_response_not_truncated(self):
-        max_chars = 100
-        short_response = "hello"
-        tts_text = short_response[:max_chars] if len(short_response) > max_chars else short_response
-        assert tts_text == "hello"
 
 
 # ─────────────────────────────────────────────
@@ -379,141 +322,6 @@ class TestMcpStatus:
 
         result = bot.get_mcp_status(str(settings_file))
         assert any("misconfigured" in line for line in result)
-
-
-class TestTranscriptionValidation:
-    def test_empty_string_invalid(self):
-        assert bot.is_valid_transcription("") is False
-
-    def test_whitespace_only_invalid(self):
-        assert bot.is_valid_transcription("   ") is False
-
-    def test_transcription_error_string_invalid(self):
-        assert bot.is_valid_transcription("[Transcription error: timeout]") is False
-
-    def test_transcription_error_any_variant_invalid(self):
-        assert bot.is_valid_transcription("[Transcription error: network failure]") is False
-
-    def test_normal_text_valid(self):
-        assert bot.is_valid_transcription("Hello, what's the weather?") is True
-
-    def test_short_text_valid(self):
-        assert bot.is_valid_transcription("ok") is True
-
-    def test_text_with_leading_whitespace_valid(self):
-        assert bot.is_valid_transcription("  Hello there  ") is True
-
-
-class TestTTSFallback:
-    def test_format_tts_fallback_contains_response(self):
-        msg = bot.format_tts_fallback("Here is your answer.")
-        assert "Here is your answer." in msg
-        assert "🔇" in msg
-
-    def test_format_tts_fallback_mentions_voice(self):
-        msg = bot.format_tts_fallback("Test.")
-        assert "Voice" in msg or "voice" in msg
-
-
-class TestBuildClaudeOptions:
-    def test_go_all_mode_has_allowed_tools(self):
-        options = bot.build_claude_options("test prompt", "go_all")
-        assert options.allowed_tools is not None
-        assert "Bash" in options.allowed_tools
-
-    def test_approve_mode_has_no_allowed_tools(self):
-        options = bot.build_claude_options("test prompt", "approve")
-        assert not options.allowed_tools
-
-    def test_approve_mode_has_can_use_tool(self):
-        fn = lambda name, inp: None
-        options = bot.build_claude_options("test prompt", "approve", can_use_tool=fn)
-        assert options.can_use_tool is fn
-
-    def test_settings_file_attached_when_configured(self, monkeypatch):
-        import claude_service
-        monkeypatch.setattr(claude_service._cfg, "CLAUDE_SETTINGS_FILE", "/fake/settings.json")
-        options = bot.build_claude_options("test", "go_all")
-        assert options.settings == "/fake/settings.json"
-
-    def test_no_settings_file_when_not_configured(self, monkeypatch):
-        import claude_service
-        monkeypatch.setattr(claude_service._cfg, "CLAUDE_SETTINGS_FILE", "")
-        options = bot.build_claude_options("test", "go_all")
-        assert not getattr(options, "settings", None)
-
-
-
-class TestClaudeTimeout:
-    def test_claude_timeout_default_is_int(self):
-        assert isinstance(config.CLAUDE_TIMEOUT, int)
-        assert config.CLAUDE_TIMEOUT > 0
-
-    def test_claude_timeout_from_env(self, monkeypatch):
-        monkeypatch.setenv("CLAUDE_TIMEOUT", "120")
-        import importlib
-        importlib.reload(config)
-        assert config.CLAUDE_TIMEOUT == 120
-        importlib.reload(config)  # restore to original env state
-
-
-class TestWorkingIndicator:
-    def test_start_creates_task(self):
-        async def run():
-            calls = []
-            async def edit_fn(msg):
-                calls.append(msg)
-            indicator = bot.WorkingIndicator(edit_fn=edit_fn, interval=0.05)
-            indicator.start()
-            assert indicator._task is not None
-            indicator.stop()
-        asyncio.run(run())
-
-    def test_stop_cancels_task(self):
-        async def run():
-            async def edit_fn(msg):
-                pass
-            indicator = bot.WorkingIndicator(edit_fn=edit_fn, interval=10.0)
-            indicator.start()
-            indicator.stop()
-            assert indicator._task is None
-        asyncio.run(run())
-
-    def test_edit_fn_called_after_interval(self):
-        async def run():
-            calls = []
-            async def edit_fn(msg):
-                calls.append(msg)
-            indicator = bot.WorkingIndicator(edit_fn=edit_fn, interval=0.05)
-            indicator.start()
-            await asyncio.sleep(0.12)
-            indicator.stop()
-            assert len(calls) >= 2
-        asyncio.run(run())
-
-    def test_messages_cycle_through_list(self):
-        async def run():
-            calls = []
-            async def edit_fn(msg):
-                calls.append(msg)
-            indicator = bot.WorkingIndicator(edit_fn=edit_fn, interval=0.02)
-            indicator.start()
-            await asyncio.sleep(0.12)
-            indicator.stop()
-            assert len(calls) >= 2
-            assert all(msg in bot.WorkingIndicator.MESSAGES for msg in calls)
-        asyncio.run(run())
-
-    def test_edit_fn_exception_does_not_propagate(self):
-        async def run():
-            async def edit_fn(msg):
-                raise RuntimeError("network error")
-            indicator = bot.WorkingIndicator(edit_fn=edit_fn, interval=0.05)
-            indicator.start()
-            await asyncio.sleep(0.12)
-            indicator.stop()
-            # no exception raised
-        asyncio.run(run())
 
 
 class TestSessionNaming:

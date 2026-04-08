@@ -275,7 +275,7 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if state["current_session"]:
         names = state.get("session_names", {})
         name = names.get(state["current_session"])
-        name_part = f" — {name}" if name else ""
+        name_part = f" — {escape_markdown(name, version=1)}" if name else ""
         await update.message.reply_text(
             f"Session: `{state['current_session'][:8]}`{name_part}\n"
             f"Total: {len(state['sessions'])}",
@@ -284,7 +284,7 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif "pending_session_name" in state:
         name = state["pending_session_name"]
         if name:
-            await update.message.reply_text(f"New session pending: *{name}* — send a message to start.", parse_mode="Markdown")
+            await update.message.reply_text(f"New session pending: *{escape_markdown(name, version=1)}* — send a message to start.", parse_mode="Markdown")
         else:
             await update.message.reply_text("New session pending — send a message to start.")
     else:

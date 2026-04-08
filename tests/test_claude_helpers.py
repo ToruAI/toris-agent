@@ -9,7 +9,11 @@ os.environ.setdefault("TELEGRAM_BOT_TOKEN", "test:token")
 os.environ.setdefault("TELEGRAM_DEFAULT_CHAT_ID", "0")
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from claude_service import format_tool_call, WorkingIndicator
+import importlib
+
+import config
+from claude_service import format_tool_call, WorkingIndicator, build_claude_options
+import claude_service
 
 
 class TestFormatToolCall:
@@ -87,3 +91,43 @@ class TestWorkingIndicator:
 
         count = asyncio.run(run())
         assert count >= 2
+
+
+class TestBuildClaudeOptions:
+    def test_go_all_mode_has_allowed_tools(self):
+        options = build_claude_options("test prompt", "go_all")
+        assert options.allowed_tools is not None
+        assert "Bash" in options.allowed_tools
+
+    def test_approve_mode_has_no_allowed_tools(self):
+        options = build_claude_options("test prompt", "approve")
+        assert not options.allowed_tools
+
+    def test_approve_mode_has_can_use_tool(self):
+        fn = lambda name, inp: None
+        options = build_claude_options("test prompt", "approve", can_use_tool=fn)
+        assert options.can_use_tool is fn
+
+    def test_settings_file_attached_when_configured(self, monkeypatch):
+        monkeypatch.setattr(claude_service._cfg, "CLAUDE_SETTINGS_FILE", "/fake/settings.json")
+        options = build_claude_options("test", "go_all")
+        assert options.settings == "/fake/settings.json"
+
+    def test_no_settings_file_when_not_configured(self, monkeypatch):
+        monkeypatch.setattr(claude_service._cfg, "CLAUDE_SETTINGS_FILE", "")
+        options = build_claude_options("test", "go_all")
+        assert not getattr(options, "settings", None)
+
+
+class TestClaudeTimeout:
+    def test_claude_timeout_default_is_int(self):
+        assert isinstance(config.CLAUDE_TIMEOUT, int)
+        assert config.CLAUDE_TIMEOUT > 0
+
+    def test_claude_timeout_from_env(self, monkeypatch):
+        monkeypatch.setenv("CLAUDE_TIMEOUT", "120")
+        importlib.reload(config)
+        assert config.CLAUDE_TIMEOUT == 120
+
+    def teardown_method(self):
+        importlib.reload(config)

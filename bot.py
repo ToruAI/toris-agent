@@ -122,7 +122,7 @@ logger = logging.getLogger(__name__)
 
 # Config — loaded from config.py (single source of truth for all env vars)
 import config as _cfg
-from auth import should_handle_message, _is_authorized, _is_admin, check_rate_limit, rate_limits
+from auth import should_handle_message, _is_authorized
 from handlers.session import (
     cmd_start, cmd_new, cmd_cancel, cmd_compact, cmd_continue,
     cmd_sessions, cmd_switch, cmd_status, cmd_search,
@@ -138,15 +138,6 @@ from handlers.messages import (
     handle_voice, handle_text, handle_photo, handle_automations_callback,
 )
 import voice_service
-from voice_service import (
-    is_valid_transcription,
-    format_tts_fallback,
-)
-import claude_service
-from claude_service import (
-    build_claude_options,
-    WorkingIndicator,
-)
 TELEGRAM_BOT_TOKEN = _cfg.TELEGRAM_BOT_TOKEN
 ALLOWED_CHAT_ID = _cfg.ALLOWED_CHAT_ID
 TOPIC_ID = _cfg.TOPIC_ID
@@ -205,6 +196,8 @@ def get_mcp_status(settings_file: str) -> list[str]:
 async def handle_unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Catch-all for unrecognised commands."""
     if not should_handle_message(update.message.message_thread_id):
+        return
+    if not _is_authorized(update):
         return
     cmd = update.message.text.split()[0]
     await update.message.reply_text(

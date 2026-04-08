@@ -43,10 +43,9 @@ def load_credentials() -> dict:
 
 def save_credentials(creds: dict):
     """Save credentials to file with secure permissions."""
-    with open(CREDENTIALS_FILE, "w") as f:
+    fd = os.open(str(CREDENTIALS_FILE), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
         json.dump(creds, f, indent=2)
-    # Restrict file permissions (owner read/write only)
-    CREDENTIALS_FILE.chmod(0o600)
 
 
 def apply_saved_credentials():

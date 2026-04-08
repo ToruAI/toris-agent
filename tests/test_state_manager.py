@@ -111,6 +111,14 @@ class TestStateManagerLocking:
 
 
 class TestStateManagerSingleton:
+    def setup_method(self):
+        import state_manager
+        self._saved_instance = state_manager._instance
+
+    def teardown_method(self):
+        import state_manager
+        state_manager._instance = self._saved_instance
+
     def test_init_creates_singleton(self, tmp_path):
         from state_manager import StateManager
         sm = StateManager.init(tmp_path / "s.json", tmp_path / "set.json")

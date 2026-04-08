@@ -48,7 +48,7 @@ def load_system_prompt() -> str:
             logger.debug(f"Loaded system prompt from {prompt_path} ({len(content)} chars)")
             return content
         else:
-            logger.debug(f"WARNING: System prompt file not found: {prompt_path}")
+            logger.warning(f"System prompt file not found: {prompt_path}")
 
     # Fallback default prompt
     return f"""You are a voice assistant. You're talking to the user.
@@ -228,7 +228,7 @@ async def call_claude(
         reply_markup = InlineKeyboardMarkup(keyboard)
 
         message_text = f"Tool Request:\n{format_tool_call(tool_name, tool_input)}"
-        await update.message.reply_text(message_text, reply_markup=reply_markup, parse_mode="Markdown")
+        await update.effective_message.reply_text(message_text, reply_markup=reply_markup, parse_mode="Markdown")
 
         logger.debug(f">>> Waiting for approval: {current_approval_id} ({tool_name}) - _shared.pending_approvals keys: {list(_shared.pending_approvals.keys())}")
 
@@ -285,7 +285,8 @@ async def call_claude(
             await client.query(full_prompt)
             async for message in client.receive_response():
                 # Check for user cancellation
-                if user_id_for_cancel is not None and _shared.cancel_events.get(user_id_for_cancel, asyncio.Event()).is_set():
+                cancel_ev = _shared.cancel_events.get(user_id_for_cancel) if user_id_for_cancel is not None else None
+                if cancel_ev is not None and cancel_ev.is_set():
                     logger.debug(f"Call cancelled by user {user_id_for_cancel}")
                     result_text = (result_text + "\n\n[Cancelled]").strip()
                     break
@@ -351,8 +352,8 @@ async def call_claude(
         logger.error(f"Claude call timed out after {_cfg.CLAUDE_TIMEOUT}s")
         return f"⏱️ Toris timed out after {_cfg.CLAUDE_TIMEOUT}s. Try a simpler request or /cancel.", session_id, {}
     except Exception as e:
-        logger.error(f"Claude SDK error: {e}")
-        return f"Error calling Claude: {e}", session_id, {}
+        logger.error(f"Claude SDK error: {e}", exc_info=True)
+        return "An error occurred. Try again or use /cancel.", session_id, {}
 
 
 # ============ Working Indicator ============
