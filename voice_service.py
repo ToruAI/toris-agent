@@ -142,6 +142,38 @@ async def text_to_speech(text: str, speed: float = None) -> BytesIO:
         return None
 
 
+async def health_check_tts() -> str:
+    """Run a minimal TTS call and return a status string for /health."""
+    if _tts_provider == "elevenlabs":
+        if not _elevenlabs:
+            return "ElevenLabs TTS: NOT CONFIGURED (no key)"
+        try:
+            def _check():
+                audio = _elevenlabs.text_to_speech.convert(
+                    text="test", voice_id=_cfg.ELEVENLABS_VOICE_ID,
+                    model_id="eleven_turbo_v2_5",
+                )
+                return sum(len(c) for c in audio if isinstance(c, bytes))
+            size = await asyncio.to_thread(_check)
+            return f"ElevenLabs TTS: OK ({size} bytes, turbo_v2_5, voice={_cfg.ELEVENLABS_VOICE_ID[:8]}...)"
+        except Exception as e:
+            return f"ElevenLabs TTS: FAILED - {e}"
+    elif _tts_provider == "openai":
+        if not _openai_client:
+            return "OpenAI TTS: NOT CONFIGURED (no key)"
+        try:
+            def _check():
+                resp = _openai_client.audio.speech.create(
+                    model=_cfg.OPENAI_TTS_MODEL, voice=_cfg.OPENAI_VOICE_ID, input="test",
+                )
+                return len(b"".join(resp.iter_bytes()))
+            size = await asyncio.to_thread(_check)
+            return f"OpenAI TTS: OK ({size} bytes, {_cfg.OPENAI_TTS_MODEL}, voice={_cfg.OPENAI_VOICE_ID})"
+        except Exception as e:
+            return f"OpenAI TTS: FAILED - {e}"
+    return "TTS: No provider configured"
+
+
 def format_tts_fallback(response_text: str) -> str:
     """Format response as text when TTS fails silently — adds a notice."""
     return f"🔇 Voice generation failed — here's the text:\n\n{response_text}"

@@ -8,8 +8,6 @@ Credentials: load/save/apply API keys
 import json
 import logging
 import os
-from elevenlabs.client import ElevenLabs
-from openai import OpenAI as OpenAIClient
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
@@ -24,16 +22,12 @@ logger = logging.getLogger(__name__)
 CREDENTIALS_FILE = _cfg.CREDENTIALS_FILE
 
 # Module-level mutable state (mirrors bot.py globals, updated by key commands)
-ELEVENLABS_API_KEY = _cfg.ELEVENLABS_API_KEY
 TTS_PROVIDER = _cfg.TTS_PROVIDER
 STT_PROVIDER = _cfg.STT_PROVIDER
 OPENAI_TTS_MODEL = _cfg.OPENAI_TTS_MODEL
 OPENAI_STT_MODEL = _cfg.OPENAI_STT_MODEL
 OPENAI_VOICE_ID = _cfg.OPENAI_VOICE_ID
 ELEVENLABS_VOICE_ID = _cfg.ELEVENLABS_VOICE_ID
-
-elevenlabs = ElevenLabs(api_key=ELEVENLABS_API_KEY)
-openai_client = OpenAIClient(api_key=_cfg.OPENAI_API_KEY) if _cfg.OPENAI_API_KEY else None
 
 
 def load_credentials() -> dict:
@@ -57,37 +51,34 @@ def save_credentials(creds: dict):
 
 def apply_saved_credentials():
     """Apply saved credentials on startup."""
-    global elevenlabs, ELEVENLABS_API_KEY, openai_client, TTS_PROVIDER, STT_PROVIDER
+    global TTS_PROVIDER, STT_PROVIDER
     creds = load_credentials()
 
     if creds.get("claude_token"):
         os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = creds["claude_token"]
         logger.debug("Applied saved Claude token")
 
-    new_elevenlabs_key = None
-    new_openai_key = None
+    elevenlabs_key = None
+    openai_key = None
 
     if creds.get("elevenlabs_key"):
-        ELEVENLABS_API_KEY = creds["elevenlabs_key"]
         os.environ["ELEVENLABS_API_KEY"] = creds["elevenlabs_key"]
-        elevenlabs = ElevenLabs(api_key=ELEVENLABS_API_KEY)
-        new_elevenlabs_key = creds["elevenlabs_key"]
+        elevenlabs_key = creds["elevenlabs_key"]
         logger.debug("Applied saved ElevenLabs key")
 
     if creds.get("openai_key"):
         os.environ["OPENAI_API_KEY"] = creds["openai_key"]
-        openai_client = OpenAIClient(api_key=creds["openai_key"])
-        new_openai_key = creds["openai_key"]
+        openai_key = creds["openai_key"]
         logger.debug("Applied saved OpenAI key")
 
     # Re-resolve providers after credentials are loaded
     TTS_PROVIDER = _cfg.resolve_provider("TTS_PROVIDER")
     STT_PROVIDER = _cfg.resolve_provider("STT_PROVIDER")
 
-    # Sync voice_service clients
+    # Sync voice_service clients (single source of truth for TTS/STT)
     voice_service.reconfigure(
-        elevenlabs_key=new_elevenlabs_key,
-        openai_key=new_openai_key,
+        elevenlabs_key=elevenlabs_key,
+        openai_key=openai_key,
         tts_provider=TTS_PROVIDER,
         stt_provider=STT_PROVIDER,
     )
@@ -189,7 +180,6 @@ async def cmd_claude_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_elevenlabs_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /elevenlabs_key command - set ElevenLabs API key."""
-    global elevenlabs, ELEVENLABS_API_KEY
 
     if not should_handle_message(update.message.message_thread_id):
         return
@@ -234,8 +224,7 @@ async def cmd_elevenlabs_key(update: Update, context: ContextTypes.DEFAULT_TYPE)
     save_credentials(creds)
 
     # Apply immediately
-    ELEVENLABS_API_KEY = key
-    elevenlabs = ElevenLabs(api_key=key)
+    os.environ["ELEVENLABS_API_KEY"] = key
     voice_service.reconfigure(elevenlabs_key=key, tts_provider=TTS_PROVIDER)
 
     await update.effective_chat.send_message(
@@ -246,7 +235,7 @@ async def cmd_elevenlabs_key(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 async def cmd_openai_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /openai_key command - set OpenAI API key."""
-    global openai_client, TTS_PROVIDER, STT_PROVIDER
+    global TTS_PROVIDER, STT_PROVIDER
 
     if not should_handle_message(update.message.message_thread_id):
         return
@@ -292,7 +281,6 @@ async def cmd_openai_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Apply immediately
     os.environ["OPENAI_API_KEY"] = key
-    openai_client = OpenAIClient(api_key=key)
     TTS_PROVIDER = _cfg.resolve_provider("TTS_PROVIDER")
     STT_PROVIDER = _cfg.resolve_provider("STT_PROVIDER")
     voice_service.reconfigure(openai_key=key, tts_provider=TTS_PROVIDER, stt_provider=STT_PROVIDER)
@@ -303,6 +291,44 @@ async def cmd_openai_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
         message_thread_id=thread_id,
         parse_mode="Markdown"
     )
+
+
+def build_settings_menu(settings: dict) -> tuple[str, InlineKeyboardMarkup]:
+    """Build settings message text and inline keyboard from user settings dict."""
+    audio_status = "ON" if settings["audio_enabled"] else "OFF"
+    speed = settings["voice_speed"]
+    mode = settings.get("mode", "go_all")
+    mode_display = "Go All" if mode == "go_all" else "Approve"
+    watch_mode_val = settings.get("watch_mode", "off").upper()
+    card_style = settings.get("automation_card_style", "full")
+    card_style_display = "Pełna" if card_style == "full" else "Kompakt"
+
+    message = (
+        f"Settings:\n\n"
+        f"Mode: {mode_display}\n"
+        f"Watch: {watch_mode_val}\n"
+        f"Audio: {audio_status}\n"
+        f"Voice Speed: {speed}x\n"
+        f"Auto karta: {card_style_display}"
+    )
+
+    keyboard = [
+        [
+            InlineKeyboardButton(f"Mode: {mode_display}", callback_data="setting_mode_toggle"),
+            InlineKeyboardButton(f"Watch: {watch_mode_val}", callback_data="setting_watch_cycle"),
+        ],
+        [InlineKeyboardButton(f"Audio: {audio_status}", callback_data="setting_audio_toggle")],
+        [
+            InlineKeyboardButton("0.8x", callback_data="setting_speed_0.8"),
+            InlineKeyboardButton("0.9x", callback_data="setting_speed_0.9"),
+            InlineKeyboardButton("1.0x", callback_data="setting_speed_1.0"),
+            InlineKeyboardButton("1.1x", callback_data="setting_speed_1.1"),
+            InlineKeyboardButton("1.2x", callback_data="setting_speed_1.2"),
+        ],
+        [InlineKeyboardButton(f"Auto karta: {card_style_display}", callback_data="setting_card_style_toggle")],
+    ]
+
+    return message, InlineKeyboardMarkup(keyboard)
 
 
 async def handle_settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -356,32 +382,7 @@ async def handle_settings_callback(update: Update, context: ContextTypes.DEFAULT
         logger.debug(f"Card style toggled to: {settings['automation_card_style']}")
 
     # Build updated settings menu
-    audio_status = "ON" if settings["audio_enabled"] else "OFF"
-    speed = settings["voice_speed"]
-    mode = settings.get("mode", "go_all")
-    mode_display = "Go All" if mode == "go_all" else "Approve"
-    watch_mode_val = settings.get("watch_mode", "off").upper()
-    card_style = settings.get("automation_card_style", "full")
-    card_style_display = "Pełna" if card_style == "full" else "Kompakt"
-
-    message = f"Settings:\n\nMode: {mode_display}\nWatch: {watch_mode_val}\nAudio: {audio_status}\nVoice Speed: {speed}x\nAuto karta: {card_style_display}"
-
-    keyboard = [
-        [
-            InlineKeyboardButton(f"Mode: {mode_display}", callback_data="setting_mode_toggle"),
-            InlineKeyboardButton(f"Watch: {watch_mode_val}", callback_data="setting_watch_cycle"),
-        ],
-        [InlineKeyboardButton(f"Audio: {audio_status}", callback_data="setting_audio_toggle")],
-        [
-            InlineKeyboardButton("0.8x", callback_data="setting_speed_0.8"),
-            InlineKeyboardButton("0.9x", callback_data="setting_speed_0.9"),
-            InlineKeyboardButton("1.0x", callback_data="setting_speed_1.0"),
-            InlineKeyboardButton("1.1x", callback_data="setting_speed_1.1"),
-            InlineKeyboardButton("1.2x", callback_data="setting_speed_1.2"),
-        ],
-        [InlineKeyboardButton(f"Auto karta: {card_style_display}", callback_data="setting_card_style_toggle")],
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
+    message, reply_markup = build_settings_menu(settings)
 
     try:
         await query.edit_message_text(message, reply_markup=reply_markup)

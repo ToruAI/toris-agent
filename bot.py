@@ -13,7 +13,7 @@ import logging
 import time
 from pathlib import Path
 from dotenv import load_dotenv
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
+from telegram import Update, BotCommand
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -22,8 +22,6 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
-from elevenlabs.client import ElevenLabs
-from openai import OpenAI as OpenAIClient
 from automations import (
     run_remote_trigger_list,
     build_automations_list,
@@ -134,6 +132,7 @@ from handlers.admin import (
     cmd_setup, cmd_claude_token, cmd_elevenlabs_key, cmd_openai_key,
     handle_settings_callback, handle_approval_callback,
     load_credentials, save_credentials, apply_saved_credentials,
+    build_settings_menu,
 )
 from handlers.messages import (
     handle_voice, handle_text, handle_photo, handle_automations_callback,
@@ -149,7 +148,6 @@ from claude_service import (
     WorkingIndicator,
 )
 TELEGRAM_BOT_TOKEN = _cfg.TELEGRAM_BOT_TOKEN
-ELEVENLABS_API_KEY = _cfg.ELEVENLABS_API_KEY
 ALLOWED_CHAT_ID = _cfg.ALLOWED_CHAT_ID
 TOPIC_ID = _cfg.TOPIC_ID
 CLAUDE_WORKING_DIR = _cfg.CLAUDE_WORKING_DIR
@@ -164,11 +162,6 @@ OPENAI_VOICE_ID = _cfg.OPENAI_VOICE_ID
 OPENAI_TTS_MODEL = _cfg.OPENAI_TTS_MODEL
 OPENAI_STT_MODEL = _cfg.OPENAI_STT_MODEL
 
-# OpenAI client (None if no key configured)
-openai_client = OpenAIClient(api_key=_cfg.OPENAI_API_KEY) if _cfg.OPENAI_API_KEY else None
-
-# ElevenLabs client
-elevenlabs = ElevenLabs(api_key=ELEVENLABS_API_KEY)
 
 
 def get_mcp_status(settings_file: str) -> list[str]:
@@ -234,34 +227,9 @@ async def cmd_health(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status = []
     status.append("=== Health Check ===\n")
 
-    # TTS provider check
+    # TTS provider check (uses voice_service's current clients, not stale copies)
     status.append(f"TTS Provider: {TTS_PROVIDER}")
-    if TTS_PROVIDER == "elevenlabs":
-        try:
-            test_audio = await asyncio.to_thread(
-                elevenlabs.text_to_speech.convert,
-                text="test",
-                voice_id=ELEVENLABS_VOICE_ID,
-                model_id="eleven_turbo_v2_5",
-            )
-            size = sum(len(c) for c in test_audio if isinstance(c, bytes))
-            status.append(f"ElevenLabs TTS: OK ({size} bytes, turbo_v2_5, voice={ELEVENLABS_VOICE_ID[:8]}...)")
-        except Exception as e:
-            status.append(f"ElevenLabs TTS: FAILED - {e}")
-    elif TTS_PROVIDER == "openai":
-        try:
-            test_audio = await asyncio.to_thread(
-                openai_client.audio.speech.create,
-                model=OPENAI_TTS_MODEL,
-                voice=OPENAI_VOICE_ID,
-                input="test",
-            )
-            size = len(b"".join(test_audio.iter_bytes()))
-            status.append(f"OpenAI TTS: OK ({size} bytes, {OPENAI_TTS_MODEL}, voice={OPENAI_VOICE_ID})")
-        except Exception as e:
-            status.append(f"OpenAI TTS: FAILED - {e}")
-    else:
-        status.append("TTS: No provider configured")
+    status.append(await voice_service.health_check_tts())
 
     status.append(f"STT Provider: {STT_PROVIDER}")
 
@@ -313,43 +281,7 @@ async def cmd_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user_id = update.effective_user.id
     settings = get_manager().get_user_settings(user_id)
-
-    # Build settings message
-    audio_status = "ON" if settings["audio_enabled"] else "OFF"
-    speed = settings["voice_speed"]
-    mode = settings.get("mode", "go_all")
-    mode_display = "Go All" if mode == "go_all" else "Approve"
-    watch_mode_val = settings.get("watch_mode", "off").upper()
-    card_style = settings.get("automation_card_style", "full")
-    card_style_display = "Pełna" if card_style == "full" else "Kompakt"
-
-    message = (
-        f"Settings:\n\n"
-        f"Mode: {mode_display}\n"
-        f"Watch: {watch_mode_val}\n"
-        f"Audio: {audio_status}\n"
-        f"Voice Speed: {speed}x\n"
-        f"Auto karta: {card_style_display}"
-    )
-
-    # Build inline keyboard
-    keyboard = [
-        [
-            InlineKeyboardButton(f"Mode: {mode_display}", callback_data="setting_mode_toggle"),
-            InlineKeyboardButton(f"Watch: {watch_mode_val}", callback_data="setting_watch_cycle"),
-        ],
-        [InlineKeyboardButton(f"Audio: {audio_status}", callback_data="setting_audio_toggle")],
-        [
-            InlineKeyboardButton("0.8x", callback_data="setting_speed_0.8"),
-            InlineKeyboardButton("0.9x", callback_data="setting_speed_0.9"),
-            InlineKeyboardButton("1.0x", callback_data="setting_speed_1.0"),
-            InlineKeyboardButton("1.1x", callback_data="setting_speed_1.1"),
-            InlineKeyboardButton("1.2x", callback_data="setting_speed_1.2"),
-        ],
-        [InlineKeyboardButton(f"Auto karta: {card_style_display}", callback_data="setting_card_style_toggle")],
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-
+    message, reply_markup = build_settings_menu(settings)
     await update.message.reply_text(message, reply_markup=reply_markup)
 
 
