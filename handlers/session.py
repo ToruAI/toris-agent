@@ -11,6 +11,7 @@ from pathlib import Path
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
+from telegram.helpers import escape_markdown
 
 import config as _cfg
 import shared_state as _shared
@@ -74,7 +75,7 @@ def format_sessions_list(sessions: list) -> str:
     lines = []
     for i, s in enumerate(sessions, 1):
         sid = s.get("id", "")[:8]
-        name = s.get("name") or "(unnamed)"
+        name = escape_markdown(s.get("name") or "(unnamed)", version=1)
         lines.append(f"{i}. `{sid}` — {name}")
     return "\n".join(lines)
 
@@ -121,7 +122,7 @@ async def cmd_new(update: Update, context: ContextTypes.DEFAULT_TYPE):
     state["pending_session_name"] = session_name
 
     if session_name:
-        await update.message.reply_text(f"✅ Starting new session: *{session_name}*", parse_mode="Markdown")
+        await update.message.reply_text(f"✅ Starting new session: *{escape_markdown(session_name, version=1)}*", parse_mode="Markdown")
     else:
         await update.message.reply_text("✅ Starting new session.")
 
@@ -368,7 +369,7 @@ async def cmd_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await searching_msg.edit_text(f"No sessions matching: {query}")
         return
 
-    lines = [f"Sessions matching *{query}*:\n"]
+    lines = [f"Sessions matching *{escape_markdown(query, version=1)}*:\n"]
     buttons = []
     for sid in matched_ids:
         if sid not in sessions:
@@ -413,4 +414,4 @@ async def handle_session_switch_callback(update, context):
     names = state.get("session_names", {})
     name = names.get(sid) or sid[:8]
     await query.edit_message_reply_markup(reply_markup=None)
-    await query.message.reply_text(f"Switched to: *{name}*", parse_mode="Markdown")
+    await query.message.reply_text(f"Switched to: *{escape_markdown(name, version=1)}*", parse_mode="Markdown")
