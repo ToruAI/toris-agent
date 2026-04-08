@@ -395,6 +395,9 @@ async def handle_session_switch_callback(update, context):
     query = update.callback_query
     await query.answer()
 
+    if not _is_authorized(update):
+        return
+
     sid = query.data.removeprefix("sess_switch_")
     user_id = update.effective_user.id
     state = get_manager().get_user_state(user_id)
