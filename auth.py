@@ -16,8 +16,8 @@ _rate_limits: dict = {}
 # Public alias for testing
 rate_limits = _rate_limits
 
-_RATE_LIMIT_SECONDS = 2
-_RATE_LIMIT_PER_MINUTE = 10
+_RATE_LIMIT_SECONDS = _cfg.RATE_LIMIT_SECONDS
+_RATE_LIMIT_PER_MINUTE = _cfg.RATE_LIMIT_PER_MINUTE
 
 
 def should_handle_message(message_thread_id: "int | None") -> bool:
