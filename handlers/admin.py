@@ -54,7 +54,11 @@ def apply_saved_credentials():
     creds = load_credentials()
 
     if creds.get("claude_token"):
-        os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = creds["claude_token"]
+        token = creds["claude_token"]
+        if token.startswith("sk-ant-api"):
+            os.environ["ANTHROPIC_API_KEY"] = token
+        else:
+            os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = token
         logger.debug("Applied saved Claude token")
 
     elevenlabs_key = None
@@ -155,9 +159,9 @@ async def cmd_claude_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     token = " ".join(context.args).strip()
 
-    if not token.startswith("sk-ant-"):
+    if len(token) < 20:
         await update.effective_chat.send_message(
-            "❌ Invalid token format. Token should start with `sk-ant-`",
+            "❌ Token looks too short. Use an API key (`sk-ant-...`) or an OAuth token from `claude setup-token`.",
             message_thread_id=thread_id,
             parse_mode="Markdown"
         )
@@ -401,41 +405,41 @@ async def handle_approval_callback(update: Update, context: ContextTypes.DEFAULT
     if callback_data.startswith("approve_"):
         approval_id = callback_data.replace("approve_", "")
         logger.debug(f">>> Looking for approval_id: {approval_id} in {list(_shared.pending_approvals.keys())}")
-        if approval_id in _shared.pending_approvals:
-            # Verify that the user clicking is the one who requested
-            if update.effective_user.id != _shared.pending_approvals[approval_id].get("user_id"):
+        async with _shared.state_lock:
+            approval = _shared.pending_approvals.get(approval_id)
+            if approval is None:
+                logger.debug(f">>> Approval {approval_id} not found (expired)")
+                await query.answer()
+                await query.edit_message_text("Approval expired")
+                return
+            if update.effective_user.id != approval.get("user_id"):
                 await query.answer("Only the requester can approve this")
                 return
-
-            await query.answer()
-            tool_name = _shared.pending_approvals[approval_id]["tool_name"]
-            _shared.pending_approvals[approval_id]["approved"] = True
+            tool_name = approval["tool_name"]
+            approval["approved"] = True
             logger.debug(f">>> Setting event for {approval_id}")
-            _shared.pending_approvals[approval_id]["event"].set()
-            logger.debug(f">>> Event set, updating message")
-            await query.edit_message_text(f"✓ Approved: {tool_name}")
-        else:
-            logger.debug(f">>> Approval {approval_id} not found (expired)")
-            await query.answer()
-            await query.edit_message_text("Approval expired")
+            approval["event"].set()
+        logger.debug(f">>> Event set, updating message")
+        await query.answer()
+        await query.edit_message_text(f"✓ Approved: {tool_name}")
 
     elif callback_data.startswith("reject_"):
         approval_id = callback_data.replace("reject_", "")
         logger.debug(f">>> Looking for approval_id: {approval_id} in {list(_shared.pending_approvals.keys())}")
-        if approval_id in _shared.pending_approvals:
-            # Verify that the user clicking is the one who requested
-            if update.effective_user.id != _shared.pending_approvals[approval_id].get("user_id"):
+        async with _shared.state_lock:
+            approval = _shared.pending_approvals.get(approval_id)
+            if approval is None:
+                logger.debug(f">>> Approval {approval_id} not found (expired)")
+                await query.answer()
+                await query.edit_message_text("Approval expired")
+                return
+            if update.effective_user.id != approval.get("user_id"):
                 await query.answer("Only the requester can reject this")
                 return
-
-            await query.answer()
-            tool_name = _shared.pending_approvals[approval_id]["tool_name"]
-            _shared.pending_approvals[approval_id]["approved"] = False
+            tool_name = approval["tool_name"]
+            approval["approved"] = False
             logger.debug(f">>> Setting event for {approval_id} (reject)")
-            _shared.pending_approvals[approval_id]["event"].set()
-            logger.debug(f">>> Event set, updating message")
-            await query.edit_message_text(f"✗ Rejected: {tool_name}")
-        else:
-            logger.debug(f">>> Approval {approval_id} not found (expired)")
-            await query.answer()
-            await query.edit_message_text("Approval expired")
+            approval["event"].set()
+        logger.debug(f">>> Event set, updating message")
+        await query.answer()
+        await query.edit_message_text(f"✗ Rejected: {tool_name}")

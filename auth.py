@@ -35,8 +35,12 @@ def should_handle_message(message_thread_id: "int | None") -> bool:
 
 
 def _is_authorized(update) -> bool:
-    """Return True if the chat is authorized to use this bot."""
-    return _cfg.ALLOWED_CHAT_ID == 0 or update.effective_chat.id == _cfg.ALLOWED_CHAT_ID
+    """Return True if the chat AND user are authorized to use this bot."""
+    if _cfg.ALLOWED_CHAT_ID != 0 and update.effective_chat.id != _cfg.ALLOWED_CHAT_ID:
+        return False
+    if _cfg.ALLOWED_USER_IDS and update.effective_user and update.effective_user.id not in _cfg.ALLOWED_USER_IDS:
+        return False
+    return True
 
 
 def _is_admin(update) -> bool:
@@ -46,6 +50,22 @@ def _is_admin(update) -> bool:
     if not _cfg.ADMIN_USER_IDS:
         return True
     return update.effective_user.id in _cfg.ADMIN_USER_IDS
+
+
+def has_claude_auth() -> bool:
+    """Quick check if any Claude auth method is configured."""
+    import os
+    if os.getenv("ANTHROPIC_API_KEY") or os.getenv("CLAUDE_CODE_OAUTH_TOKEN"):
+        return True
+    creds_file = _cfg.CREDENTIALS_FILE
+    if creds_file.exists():
+        try:
+            import json
+            data = json.loads(creds_file.read_text())
+            return bool(data.get("claude_token"))
+        except (ValueError, IOError):
+            pass
+    return False
 
 
 def check_rate_limit(user_id: int) -> "tuple[bool, str]":

@@ -153,10 +153,11 @@ class TestMaxVoiceChars:
 # ─────────────────────────────────────────────
 
 class TestAdminUserIds:
-    def _make_cfg(self, allowed_chat_id=0, admin_user_ids=None):
+    def _make_cfg(self, allowed_chat_id=0, admin_user_ids=None, allowed_user_ids=None):
         return type("C", (), {
             "ALLOWED_CHAT_ID": allowed_chat_id,
             "ADMIN_USER_IDS": admin_user_ids if admin_user_ids is not None else set(),
+            "ALLOWED_USER_IDS": allowed_user_ids if allowed_user_ids is not None else set(),
         })()
 
     def test_is_authorized_with_zero_chat_id(self, monkeypatch):
@@ -175,6 +176,7 @@ class TestAdminUserIds:
         class FakeUpdate:
             class effective_chat:
                 id = 99999
+            effective_user = None
 
         assert auth._is_authorized(FakeUpdate()) is True
 
@@ -184,6 +186,7 @@ class TestAdminUserIds:
         class FakeUpdate:
             class effective_chat:
                 id = 11111
+            effective_user = None
 
         assert auth._is_authorized(FakeUpdate()) is False
 
@@ -383,10 +386,35 @@ class TestErrorMessages:
         assert "TTS" in msg
         assert "❌" in msg
 
-    def test_generic_error_truncated(self):
-        long_exc = Exception("x" * 300)
-        msg = error_message("ctx", long_exc)
-        assert len(msg) < 200
+    def test_generic_error_sanitized(self):
+        """Generic errors should not leak exception details to user."""
+        msg = error_message("ctx", Exception("secret-api-key-sk-ant-12345"))
+        assert "secret" not in msg
+        assert "sk-ant" not in msg
+        assert "ctx" in msg
+
+
+class TestSharedStateLock:
+    def test_state_lock_exists(self):
+        import shared_state
+        import asyncio
+        assert hasattr(shared_state, "state_lock")
+        assert isinstance(shared_state.state_lock, asyncio.Lock)
+
+    def test_state_lock_is_module_singleton(self):
+        import shared_state as s1
+        import shared_state as s2
+        assert s1.state_lock is s2.state_lock
+
+    def test_lock_protects_concurrent_dict_access(self):
+        """Lock can be acquired and released without error."""
+        import shared_state
+        async def _test():
+            async with shared_state.state_lock:
+                shared_state.pending_approvals["test"] = True
+            async with shared_state.state_lock:
+                del shared_state.pending_approvals["test"]
+        asyncio.run(_test())
 
 
 class TestVoiceServiceImport:

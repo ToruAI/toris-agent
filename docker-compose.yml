@@ -18,6 +18,8 @@ services:
     container_name: claude-voice-toris
     env_file:
       - docker/toris.env
+    environment:
+      - STATE_DIR=/home/claude/state
     volumes:
       # Persistent state (session history, user settings)
       - toris-state:/home/claude/state

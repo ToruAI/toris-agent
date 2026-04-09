@@ -43,6 +43,11 @@ ADMIN_USER_IDS: set[int] = (
     set(int(uid.strip()) for uid in _admin_raw.split(",") if uid.strip().isdigit())
     if _admin_raw.strip() else set()
 )
+_allowed_users_raw = os.getenv("TELEGRAM_ALLOWED_USER_IDS", "")
+ALLOWED_USER_IDS: set[int] = (
+    set(int(uid.strip()) for uid in _allowed_users_raw.split(",") if uid.strip().isdigit())
+    if _allowed_users_raw.strip() else set()
+)
 TOPIC_ID: str | None = os.getenv("TELEGRAM_TOPIC_ID") or None
 
 # ── Claude ────────────────────────────────────────────────────────────────────
@@ -77,9 +82,10 @@ RATE_LIMIT_SECONDS: int = _int("RATE_LIMIT_SECONDS", 2)
 RATE_LIMIT_PER_MINUTE: int = _int("RATE_LIMIT_PER_MINUTE", 10)
 
 # ── State files ───────────────────────────────────────────────────────────────
-STATE_FILE: Path = Path(__file__).parent / "sessions_state.json"
-SETTINGS_FILE: Path = Path(__file__).parent / "user_settings.json"
-CREDENTIALS_FILE: Path = Path(__file__).parent / "credentials.json"
+_STATE_DIR: Path = Path(os.getenv("STATE_DIR", str(Path(__file__).parent)))
+STATE_FILE: Path = _STATE_DIR / "sessions_state.json"
+SETTINGS_FILE: Path = _STATE_DIR / "user_settings.json"
+CREDENTIALS_FILE: Path = _STATE_DIR / "credentials.json"
 
 
 def validate() -> list[str]:
@@ -89,6 +95,8 @@ def validate() -> list[str]:
         warnings.append("TELEGRAM_BOT_TOKEN is required")
     if ALLOWED_CHAT_ID == 0:
         warnings.append("TELEGRAM_DEFAULT_CHAT_ID=0 — bot responds to ALL chats (set a specific chat ID)")
+    if not ALLOWED_USER_IDS:
+        warnings.append("TELEGRAM_ALLOWED_USER_IDS empty — any user in authorized chat can use the bot")
     if TTS_PROVIDER == "none":
         warnings.append("No TTS provider key configured — voice output disabled")
     if STT_PROVIDER == "none":

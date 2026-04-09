@@ -76,6 +76,54 @@ class TestCheckRateLimit:
         assert auth._rate_limits["77"]["minute_count"] == 1
 
 
+class TestAllowedUserIds:
+    def _make_cfg(self, allowed_chat_id=0, allowed_user_ids=None):
+        return type("C", (), {
+            "ALLOWED_CHAT_ID": allowed_chat_id,
+            "ALLOWED_USER_IDS": allowed_user_ids if allowed_user_ids is not None else set(),
+        })()
+
+    def _fake_update(self, chat_id=1, user_id=100):
+        class FakeUpdate:
+            class effective_chat:
+                id = chat_id
+            class effective_user:
+                id = user_id
+        FakeUpdate.effective_chat.id = chat_id
+        FakeUpdate.effective_user.id = user_id
+        return FakeUpdate()
+
+    def test_empty_allowed_users_permits_all(self, monkeypatch):
+        monkeypatch.setattr(auth, "_cfg", self._make_cfg(allowed_user_ids=set()))
+        assert auth._is_authorized(self._fake_update(user_id=999)) is True
+
+    def test_allowed_user_id_matches(self, monkeypatch):
+        monkeypatch.setattr(auth, "_cfg", self._make_cfg(allowed_user_ids={100, 200}))
+        assert auth._is_authorized(self._fake_update(user_id=100)) is True
+
+    def test_user_id_not_in_allowed_rejected(self, monkeypatch):
+        monkeypatch.setattr(auth, "_cfg", self._make_cfg(allowed_user_ids={100, 200}))
+        assert auth._is_authorized(self._fake_update(user_id=999)) is False
+
+    def test_chat_id_and_user_id_both_checked(self, monkeypatch):
+        monkeypatch.setattr(auth, "_cfg", self._make_cfg(allowed_chat_id=42, allowed_user_ids={100}))
+        # Right user, wrong chat
+        assert auth._is_authorized(self._fake_update(chat_id=99, user_id=100)) is False
+        # Right chat, wrong user
+        assert auth._is_authorized(self._fake_update(chat_id=42, user_id=999)) is False
+        # Both right
+        assert auth._is_authorized(self._fake_update(chat_id=42, user_id=100)) is True
+
+    def test_no_effective_user_still_passes_when_empty(self, monkeypatch):
+        """Bot-level messages (no user) should pass when no user filter is set."""
+        monkeypatch.setattr(auth, "_cfg", self._make_cfg(allowed_user_ids=set()))
+        class FakeUpdate:
+            class effective_chat:
+                id = 1
+            effective_user = None
+        assert auth._is_authorized(FakeUpdate()) is True
+
+
 class TestShouldHandleMessageInvalidTopicId:
     def test_invalid_topic_id_warns_and_handles_all(self, monkeypatch):
         """Non-integer TOPIC_ID logs a warning and accepts all messages."""

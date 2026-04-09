@@ -6,6 +6,7 @@ transcription → Claude → TTS → state update → reply
 """
 import asyncio
 import logging
+import os
 import re
 from datetime import datetime
 from pathlib import Path
@@ -14,15 +15,317 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ChatAction
 from telegram.ext import ContextTypes
 
+import subprocess
+
 import config as _cfg
-from auth import should_handle_message, _is_authorized, check_rate_limit
+from auth import should_handle_message, _is_authorized, check_rate_limit, has_claude_auth
 from automations import (
     build_automation_card, build_automations_list,
     run_remote_trigger_list, run_remote_trigger_run, run_remote_trigger_toggle,
 )
 from claude_service import WorkingIndicator, call_claude
 from state_manager import get_manager
-from voice_service import format_tts_fallback, is_valid_transcription, text_to_speech, transcribe_voice
+from handlers.admin import load_credentials, save_credentials, apply_saved_credentials
+from voice_service import (
+    format_tts_fallback, is_valid_transcription, text_to_speech, transcribe_voice,
+    verify_elevenlabs_key, verify_openai_key,
+)
+
+_NO_AUTH_MSG = (
+    "⚠️ Claude is not configured yet.\n\n"
+    "Run /setup to add your API key, then try again."
+)
+
+
+async def _verify_claude_token(token: str) -> tuple[bool, str]:
+    """Test a Claude token by running a minimal Claude CLI query."""
+    env = os.environ.copy()
+    # sk-ant-api- = direct API key; sk-ant-oat- = OAuth token; anything else = OAuth
+    if token.startswith("sk-ant-api"):
+        env["ANTHROPIC_API_KEY"] = token
+        env.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
+    else:
+        env["CLAUDE_CODE_OAUTH_TOKEN"] = token
+        env.pop("ANTHROPIC_API_KEY", None)
+    try:
+        result = await asyncio.to_thread(
+            subprocess.run,
+            ["claude", "-p", "Say OK", "--output-format", "json"],
+            capture_output=True, text=True, timeout=30,
+            cwd=_cfg.CLAUDE_WORKING_DIR, env=env,
+        )
+        if result.returncode != 0:
+            return False, result.stderr[:120]
+        # claude returns exit 0 even on auth errors — check JSON
+        import json as _json
+        try:
+            data = _json.loads(result.stdout)
+            if data.get("is_error"):
+                return False, data.get("result", "Unknown error")[:120]
+        except (ValueError, KeyError):
+            pass
+        return True, "OK"
+    except subprocess.TimeoutExpired:
+        return False, "Timed out (30s)"
+    except Exception as e:
+        return False, str(e)[:120]
+
+
+async def _handle_onboarding(update, context, settings, step):
+    """Handle conversational onboarding steps."""
+    text = update.message.text.strip()
+
+    if step == "awaiting_name":
+        name = text.split("\n")[0][:50].strip()
+        if not name:
+            await update.message.reply_text("What's your name?")
+            return
+
+        settings["user_name"] = name
+        settings["onboarding"] = "awaiting_auth_choice"
+        get_manager().save_settings()
+
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔑 API Key", callback_data="onboard_api")],
+            [InlineKeyboardButton("🔐 OAuth (Claude subscription)", callback_data="onboard_oauth")],
+        ])
+        await update.message.reply_text(
+            f"Nice to meet you, {name}! 👋\n\n"
+            "How would you like to connect Claude?",
+            reply_markup=keyboard,
+        )
+        return
+
+    if step in ("awaiting_auth_choice", "awaiting_voice_choice"):
+        await update.message.reply_text("Please choose an option above. 👆")
+        return
+
+    if step == "awaiting_api_key":
+        try:
+            await update.message.delete()
+        except Exception:
+            pass
+
+        thread_id = update.message.message_thread_id
+        token = text.strip()
+
+        if not token.startswith("sk-ant-"):
+            await update.effective_chat.send_message(
+                "That doesn't look like a Claude API key (should start with `sk-ant-`).\n\n"
+                "Get one at: https://console.anthropic.com/settings/keys",
+                message_thread_id=thread_id,
+                parse_mode="Markdown"
+            )
+            return
+
+        await _save_claude_token(update, settings, token)
+        return
+
+    if step == "awaiting_oauth_token":
+        try:
+            await update.message.delete()
+        except Exception:
+            pass
+
+        thread_id = update.message.message_thread_id
+        token = text.strip()
+
+        if len(token) < 20:
+            await update.effective_chat.send_message(
+                "That token looks too short.\n\n"
+                "Run `claude setup-token` in your terminal and paste the full output here.",
+                message_thread_id=thread_id,
+                parse_mode="Markdown"
+            )
+            return
+
+        await _save_claude_token(update, settings, token)
+        return
+
+    if step == "awaiting_elevenlabs_key":
+        try:
+            await update.message.delete()
+        except Exception:
+            pass
+
+        thread_id = update.message.message_thread_id
+        key = text.strip()
+
+        verifying = await update.effective_chat.send_message("Verifying ElevenLabs key...", message_thread_id=thread_id)
+        ok, msg = await verify_elevenlabs_key(key)
+
+        if not ok:
+            await verifying.edit_text(f"❌ ElevenLabs key invalid: {msg}\n\nTry again or paste a different key.")
+            return
+
+        await _save_voice_key(update, settings, "elevenlabs", key, verifying)
+        return
+
+    if step == "awaiting_openai_key":
+        try:
+            await update.message.delete()
+        except Exception:
+            pass
+
+        thread_id = update.message.message_thread_id
+        key = text.strip()
+
+        verifying = await update.effective_chat.send_message("Verifying OpenAI key...", message_thread_id=thread_id)
+        ok, msg = await verify_openai_key(key)
+
+        if not ok:
+            await verifying.edit_text(f"❌ OpenAI key invalid: {msg}\n\nTry again or paste a different key.")
+            return
+
+        await _save_voice_key(update, settings, "openai", key, verifying)
+        return
+
+
+async def _save_claude_token(update, settings, token):
+    """Verify and save Claude token, then move to voice provider choice."""
+    thread_id = getattr(update.message, "message_thread_id", None) if update.message else None
+    chat = update.effective_chat
+
+    verifying = await chat.send_message("Verifying token...", message_thread_id=thread_id)
+
+    ok, msg = await _verify_claude_token(token)
+    if not ok:
+        await verifying.edit_text(f"❌ Token verification failed: {msg}\n\nCheck the token and try again.")
+        return
+
+    creds = load_credentials()
+    creds["claude_token"] = token
+    save_credentials(creds)
+    if token.startswith("sk-ant-api"):
+        os.environ["ANTHROPIC_API_KEY"] = token
+    else:
+        os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = token
+
+    settings["onboarding"] = "awaiting_voice_choice"
+    get_manager().save_settings()
+
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔊 ElevenLabs", callback_data="onboard_elevenlabs")],
+        [InlineKeyboardButton("🔊 OpenAI", callback_data="onboard_openai")],
+        [InlineKeyboardButton("⏩ Skip (text only)", callback_data="onboard_skip_voice")],
+    ])
+    await verifying.edit_text(
+        "✅ Claude connected!\n\n"
+        "Want voice responses? Choose a provider or skip:",
+        reply_markup=keyboard,
+    )
+
+
+async def _save_voice_key(update, settings, provider, key, status_msg):
+    """Save a verified voice provider key and finish onboarding."""
+    import voice_service
+
+    creds = load_credentials()
+    if provider == "elevenlabs":
+        creds["elevenlabs_key"] = key
+        os.environ["ELEVENLABS_API_KEY"] = key
+    else:
+        creds["openai_key"] = key
+        os.environ["OPENAI_API_KEY"] = key
+    save_credentials(creds)
+
+    apply_saved_credentials()
+
+    _finish_onboarding(settings)
+
+    user_name = settings.get("user_name", "")
+    persona = _cfg.PERSONA_NAME
+    await status_msg.edit_text(
+        f"✅ All set, {user_name}! *{persona}* is ready.\n\n"
+        f"Voice: {provider}\n\n"
+        "Send me a message or voice note to start chatting.\n\n"
+        "_/settings to tweak voice, /setup for more options._",
+        parse_mode="Markdown"
+    )
+
+
+def _finish_onboarding(settings):
+    """Mark onboarding as complete."""
+    settings["onboarding"] = None
+    settings["onboarding_done"] = True
+    get_manager().save_settings()
+
+
+async def handle_onboarding_callback(update, context):
+    """Handle inline button presses during onboarding."""
+    query = update.callback_query
+    await query.answer()
+
+    from auth import _is_authorized
+    if not _is_authorized(update):
+        return
+
+    user_id = update.effective_user.id
+    settings = get_manager().get_user_settings(user_id)
+    step = settings.get("onboarding")
+
+    if step == "awaiting_auth_choice":
+        choice = query.data
+
+        if choice == "onboard_api":
+            settings["onboarding"] = "awaiting_api_key"
+            get_manager().save_settings()
+            await query.edit_message_text(
+                "Paste your Anthropic API key below.\n\n"
+                "1. Go to: https://console.anthropic.com/settings/keys\n"
+                "2. Create a key and paste it here\n\n"
+                "It starts with `sk-ant-`. I'll delete your message right away for security.",
+                parse_mode="Markdown"
+            )
+
+        elif choice == "onboard_oauth":
+            settings["onboarding"] = "awaiting_oauth_token"
+            get_manager().save_settings()
+            await query.edit_message_text(
+                "To use your Claude subscription:\n\n"
+                "1. On a computer with a browser, run:\n"
+                "`claude setup-token`\n\n"
+                "2. Log in when the browser opens\n"
+                "3. Copy the token and paste it here\n\n"
+                "I'll delete your message right away for security.",
+                parse_mode="Markdown"
+            )
+
+    elif step == "awaiting_voice_choice":
+        choice = query.data
+
+        if choice == "onboard_elevenlabs":
+            settings["onboarding"] = "awaiting_elevenlabs_key"
+            get_manager().save_settings()
+            await query.edit_message_text(
+                "Paste your ElevenLabs API key below.\n\n"
+                "Get one at: https://elevenlabs.io/app/settings/api-keys\n\n"
+                "I'll delete your message right away for security.",
+                parse_mode="Markdown"
+            )
+
+        elif choice == "onboard_openai":
+            settings["onboarding"] = "awaiting_openai_key"
+            get_manager().save_settings()
+            await query.edit_message_text(
+                "Paste your OpenAI API key below.\n\n"
+                "Get one at: https://platform.openai.com/api-keys\n\n"
+                "I'll delete your message right away for security.",
+                parse_mode="Markdown"
+            )
+
+        elif choice == "onboard_skip_voice":
+            settings["audio_enabled"] = False
+            _finish_onboarding(settings)
+
+            user_name = settings.get("user_name", "")
+            persona = _cfg.PERSONA_NAME
+            await query.edit_message_text(
+                f"✅ All set, {user_name}! *{persona}* is ready.\n\n"
+                "Send me a message to start chatting.\n\n"
+                "_You can add voice later via /setup._",
+                parse_mode="Markdown"
+            )
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +345,8 @@ def error_message(context: str, exc: Exception) -> str:
         return f"❌ {context}: Authentication failed. Check API keys."
     if "connect" in exc_str.lower() or "network" in exc_str.lower():
         return f"❌ {context}: Network error. Check your connection."
-    return f"❌ {context}: {exc_str[:120]}"
+    logger.warning(f"{context} error: {exc_str}")
+    return f"❌ {context} failed. Try again or use /cancel."
 
 
 _UUID_RE = re.compile(r'\b([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b')
@@ -251,6 +555,10 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not _is_authorized(update):
         return
 
+    if not has_claude_auth():
+        await update.message.reply_text(_NO_AUTH_MSG)
+        return
+
     user_id = update.effective_user.id
 
     # Rate limiting
@@ -352,6 +660,17 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     user_id = update.effective_user.id
+    settings = get_manager().get_user_settings(user_id)
+
+    # Onboarding flow — intercept text during setup
+    onboarding = settings.get("onboarding")
+    if onboarding and not settings.get("onboarding_done"):
+        await _handle_onboarding(update, context, settings, onboarding)
+        return
+
+    if not has_claude_auth():
+        await update.message.reply_text(_NO_AUTH_MSG)
+        return
 
     # Rate limiting
     allowed, rate_msg = check_rate_limit(user_id)
@@ -360,13 +679,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     state = get_manager().get_user_state(user_id)
-    settings = get_manager().get_user_settings(user_id)
     text = update.message.text
 
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
     typing_stop = asyncio.Event()
     asyncio.create_task(typing_loop(update, context, typing_stop))
-    processing_msg = await update.message.reply_text("Toris thinking...")
+    processing_msg = await update.message.reply_text(f"{_cfg.PERSONA_NAME} thinking...")
 
     # Prepend compact summary if pending from /compact
     compact_summary = state.pop("compact_summary", None)

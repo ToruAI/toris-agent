@@ -177,3 +177,23 @@ async def health_check_tts() -> str:
 def format_tts_fallback(response_text: str) -> str:
     """Format response as text when TTS fails silently — adds a notice."""
     return f"🔇 Voice generation failed — here's the text:\n\n{response_text}"
+
+
+async def verify_elevenlabs_key(key: str) -> tuple[bool, str]:
+    """Test an ElevenLabs API key with a lightweight voices list call."""
+    try:
+        client = ElevenLabs(api_key=key)
+        count = await asyncio.to_thread(lambda: len(client.voices.get_all().voices))
+        return True, f"{count} voices available"
+    except Exception as e:
+        return False, str(e)[:120]
+
+
+async def verify_openai_key(key: str) -> tuple[bool, str]:
+    """Test an OpenAI API key with a models list call."""
+    try:
+        client = OpenAIClient(api_key=key)
+        await asyncio.to_thread(lambda: client.models.list())
+        return True, "OK"
+    except Exception as e:
+        return False, str(e)[:120]

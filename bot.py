@@ -136,6 +136,7 @@ from handlers.admin import (
 )
 from handlers.messages import (
     handle_voice, handle_text, handle_photo, handle_automations_callback,
+    handle_onboarding_callback,
 )
 import voice_service
 TELEGRAM_BOT_TOKEN = _cfg.TELEGRAM_BOT_TOKEN
@@ -332,6 +333,7 @@ def main():
     # Callback handlers for inline keyboards
     app.add_handler(CallbackQueryHandler(handle_settings_callback, pattern="^setting_"))
     app.add_handler(CallbackQueryHandler(handle_approval_callback, pattern="^(approve_|reject_)"))
+    app.add_handler(CallbackQueryHandler(handle_onboarding_callback, pattern="^onboard_"))
     app.add_handler(CallbackQueryHandler(handle_automations_callback, pattern="^auto_"))
     app.add_handler(CallbackQueryHandler(handle_session_switch_callback, pattern="^sess_switch_"))
 
@@ -348,21 +350,52 @@ def main():
     # Register commands in Telegram menu (the "/" autocomplete list)
     async def post_init(application):
         await application.bot.set_my_commands([
-            BotCommand("new",      "Start a new session"),
-            BotCommand("cancel",   "Cancel current request"),
-            BotCommand("compact",  "Summarize & compress current session"),
-            BotCommand("continue", "Continue last session"),
-            BotCommand("sessions", "List recent sessions"),
-            BotCommand("switch",   "Switch to a session by ID"),
-            BotCommand("search",   "Search sessions by keyword"),
-            BotCommand("status",   "Current session info"),
+            BotCommand("start",       "Get started / help"),
+            BotCommand("setup",       "Configure API credentials"),
+            BotCommand("health",      "Check bot & API status"),
+            BotCommand("new",         "Start a new session"),
+            BotCommand("continue",    "Resume last session"),
+            BotCommand("sessions",    "List recent sessions"),
+            BotCommand("switch",      "Switch to a session by ID"),
+            BotCommand("search",      "Search sessions by keyword"),
+            BotCommand("cancel",      "Cancel current request"),
+            BotCommand("compact",     "Summarize & compress session"),
+            BotCommand("status",      "Current session info"),
             BotCommand("settings",    "Voice, mode & speed settings"),
-            BotCommand("health",   "Check bot & API status"),
-            BotCommand("setup",       "Configure API tokens"),
             BotCommand("automations", "Manage scheduled automations"),
-            BotCommand("start",       "Show help"),
         ])
+
+        # First boot greeting — send welcome to allowed users if no one has been onboarded yet
+        mgr = get_manager()
+        if not mgr.all_settings():
+            persona = _cfg.PERSONA_NAME
+            for uid in _cfg.ALLOWED_USER_IDS:
+                try:
+                    settings = mgr.get_user_settings(uid)
+                    settings["onboarding"] = "awaiting_name"
+                    await application.bot.send_message(
+                        chat_id=uid,
+                        text=(
+                            f"👋 Hey! I'm {persona} — your new AI assistant.\n\n"
+                            "What's your name?"
+                        ),
+                    )
+                except Exception as e:
+                    logger.warning(f"Could not send welcome to {uid}: {e}")
+            mgr.save_settings()
+
     app.post_init = post_init
+
+    async def post_shutdown(application):
+        """Flush state to disk on graceful shutdown (SIGTERM / docker stop)."""
+        try:
+            get_manager().save_state()
+            get_manager().save_settings()
+            logger.info("State saved on shutdown")
+        except Exception as e:
+            logger.error(f"Failed to save state on shutdown: {e}")
+
+    app.post_shutdown = post_shutdown
 
     logger.debug("Bot starting...")
     logger.debug(f"Persona: {PERSONA_NAME}")

@@ -210,13 +210,14 @@ async def call_claude(
         approval_event = asyncio.Event()
 
         # Store pending approval with requesting user_id
-        _shared.pending_approvals[current_approval_id] = {
-            "user_id": update.effective_user.id,
-            "event": approval_event,
-            "approved": None,
-            "tool_name": tool_name,
-            "input": tool_input,
-        }
+        async with _shared.state_lock:
+            _shared.pending_approvals[current_approval_id] = {
+                "user_id": update.effective_user.id,
+                "event": approval_event,
+                "approved": None,
+                "tool_name": tool_name,
+                "input": tool_input,
+            }
 
         # Send approval request to Telegram
         keyboard = [
@@ -239,12 +240,14 @@ async def call_claude(
             logger.debug(f">>> Event.wait() completed for {current_approval_id}")
         except asyncio.TimeoutError:
             logger.debug(f">>> Approval timeout for {current_approval_id}")
-            del _shared.pending_approvals[current_approval_id]
+            async with _shared.state_lock:
+                _shared.pending_approvals.pop(current_approval_id, None)
             return PermissionResultDeny(message="Approval timed out")
 
         # Check result
         logger.debug(f">>> Checking result for {current_approval_id}")
-        approval_data = _shared.pending_approvals.pop(current_approval_id, {})
+        async with _shared.state_lock:
+            approval_data = _shared.pending_approvals.pop(current_approval_id, {})
         if approval_data.get("approved"):
             logger.debug(f">>> Tool approved: {tool_name}")
             return PermissionResultAllow()
@@ -271,12 +274,13 @@ async def call_claude(
     # debug_msg created lazily on first tool use (debug mode only)
     debug_msg = None
 
-    # Set up cancellation tracking for this user
+    # Set up cancellation tracking for this user (lock protects dict mutation)
     user_id_for_cancel = update.effective_user.id if update else None
     if user_id_for_cancel is not None:
-        if user_id_for_cancel not in _shared.cancel_events:
-            _shared.cancel_events[user_id_for_cancel] = asyncio.Event()
-        _shared.cancel_events[user_id_for_cancel].clear()  # Reset at start of each call
+        async with _shared.state_lock:
+            if user_id_for_cancel not in _shared.cancel_events:
+                _shared.cancel_events[user_id_for_cancel] = asyncio.Event()
+            _shared.cancel_events[user_id_for_cancel].clear()
 
     async def _run_claude():
         nonlocal result_text, new_session_id, tool_count, tool_log, debug_msg
@@ -390,8 +394,8 @@ class WorkingIndicator:
             self._count += 1
             try:
                 await self._edit_fn(msg)
-            except Exception:
-                pass  # Status update failure must never crash the main call
+            except Exception as e:
+                logger.debug(f"Status update skipped: {e}")
 
     def start(self):
         """Start the background status update task."""

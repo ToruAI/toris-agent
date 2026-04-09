@@ -15,7 +15,7 @@ from telegram.helpers import escape_markdown
 
 import config as _cfg
 import shared_state as _shared
-from auth import should_handle_message, _is_authorized
+from auth import should_handle_message, _is_authorized, has_claude_auth
 from claude_service import call_claude
 from state_manager import get_manager
 
@@ -81,28 +81,44 @@ def format_sessions_list(sessions: list) -> str:
 
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /start command."""
+    """Handle /start command — onboarding or help."""
     if not should_handle_message(update.message.message_thread_id):
         return
 
     if not _is_authorized(update):
         return
 
+    user_id = update.effective_user.id
+    settings = get_manager().get_user_settings(user_id)
+    persona = _cfg.PERSONA_NAME
+
+    # First-time user without Claude auth → start onboarding
+    if not has_claude_auth() and not settings.get("onboarding_done"):
+        settings["onboarding"] = "awaiting_name"
+        get_manager().save_settings()
+        await update.message.reply_text(
+            "👋 Hey! Let's get you set up.\n\n"
+            "What's your name?"
+        )
+        return
+
+    # Already set up → show help
     await update.message.reply_text(
-        "Claude Voice Assistant\n\n"
-        "Send me a voice message and I'll process it with Claude.\n\n"
-        "Commands:\n"
-        "/setup - Configure API credentials\n"
-        "/new [name] - Start new session\n"
-        "/cancel - Cancel active request\n"
-        "/compact - Summarize & compress session\n"
-        "/continue - Resume last session\n"
-        "/sessions - List all sessions\n"
-        "/search <query> - Find sessions by content\n"
-        "/switch <id prefix> - Switch to session\n"
-        "/status - Current session info\n"
-        "/settings - Configure audio and voice speed\n"
-        "/health - Check Claude, STT, TTS status"
+        f"👋 {persona} is ready!\n\n"
+        "Send me a voice message or text.\n\n"
+        "Sessions:\n"
+        "/new [name] — start new session\n"
+        "/continue — resume last session\n"
+        "/sessions — list all sessions\n"
+        "/switch <id> — switch session\n"
+        "/search <query> — find sessions\n"
+        "/cancel — cancel active request\n"
+        "/compact — compress session\n"
+        "/status — current session info\n\n"
+        "Settings:\n"
+        "/settings — voice, mode & speed\n"
+        "/setup — API credentials\n"
+        "/health — system status"
     )
 
 
@@ -138,9 +154,14 @@ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     user_id = update.effective_user.id
-    event = _shared.cancel_events.get(user_id)
-    if event is not None and not event.is_set():
-        event.set()
+    async with _shared.state_lock:
+        event = _shared.cancel_events.get(user_id)
+        if event is not None and not event.is_set():
+            event.set()
+            cancel = True
+        else:
+            cancel = False
+    if cancel:
         await update.message.reply_text("Cancelling...")
     else:
         await update.message.reply_text("No active request to cancel.")

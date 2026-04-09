@@ -50,6 +50,23 @@ class TestConfigDefaults:
         assert isinstance(config.CREDENTIALS_FILE, Path)
 
 
+class TestStateDirConfig:
+    def test_state_dir_default_is_project_root(self):
+        """Without STATE_DIR env, files go next to config.py."""
+        assert config.STATE_FILE.parent == Path(config.__file__).parent
+
+    def test_state_dir_env_overrides_path(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("STATE_DIR", str(tmp_path))
+        importlib.reload(config)
+        assert config.STATE_FILE == tmp_path / "sessions_state.json"
+        assert config.SETTINGS_FILE == tmp_path / "user_settings.json"
+        assert config.CREDENTIALS_FILE == tmp_path / "credentials.json"
+
+    def teardown_method(self):
+        os.environ.pop("STATE_DIR", None)
+        importlib.reload(config)
+
+
 class TestConfigValidate:
     def test_validate_warns_on_zero_chat_id(self, monkeypatch):
         monkeypatch.setenv("TELEGRAM_DEFAULT_CHAT_ID", "0")
