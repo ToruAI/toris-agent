@@ -3,45 +3,13 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 
-**A second brain you can talk to out loud.**
+**Claude Code as a Telegram voice bot. Runs on your Claude Pro/Max/Teams subscription.**
+
+If you know [OpenClaw](https://github.com/openclaw/openclaw), think single-channel cousin: Telegram only, voice-first, built straight on the Claude Agent SDK. No Anthropic API key, no per-token billing. Paste your `claude setup-token` OAuth into `/setup` and start talking.
 
 <!-- Demo GIF here -->
 
-Toris is a voice-first thinking partner that lives in Telegram. You walk, you talk, it listens — and unlike a chatbot, it actually *does* things. It researches the market while you're still mid-sentence. It pushes back when an idea doesn't hold up. It remembers what you said last week. It writes and runs the code when you're ready to stop thinking and start building.
-
-It's not here to wait for orders. It's here to think *with* you, offload what's in your head, and hand it back when you're ready to act.
-
-And it runs on your **Claude Pro / Max / Teams subscription** — the same OAuth token that powers your `claude` CLI at the terminal. No API credits to top up, no per-token billing, no separate Anthropic bill.
-
-## Why It Exists
-
-Most "AI assistants" are a text box you type at. Fine when you're at a desk. But the most useful thinking — half-formed ideas, "wait, what if…", the stuff you'd say out loud to a smart friend — happens when you're walking, driving, or pacing around the kitchen. Nowhere near a keyboard.
-
-Voice chatbots exist, sure. But they're wrappers around chat completions: they can't read your files, can't search the web, can't write a script and run it, can't remember yesterday. Parrots with good diction.
-
-Toris is built on the Claude Agent SDK, which means real tools — Bash, Read, Grep, WebSearch, Edit, Write — all reachable through a voice message in Telegram. Say *"check if anyone's already built this and if not, scaffold it in the sandbox"* and it will. Say *"remember that"* and it will, via a pluggable MCP memory server. Say nothing for two days and come back to `/continue` where you left off.
-
-## What It's Good At
-
-- **Walking-around thinking** — pace around, dump half-formed ideas, get real push-back instead of validation theater
-- **Reality-checking** — searches the web to ground ideas in what actually exists, before you spend a week building the wrong thing
-- **Remembering** — notes and threads persist across sessions; the default persona uses [MEGG](https://www.npmjs.com/package/megg), but any MCP memory server works
-- **Doing the work** — when you're ready, it writes and executes code in a sandbox instead of just describing it
-- **Session continuity** — conversations persist across messages, restarts, and days; navigate them with `/sessions`, `/search`, `/switch`, `/compact`
-- **Per-tool approval** — "Approve" mode lets you authorize each action before it runs; "Go All" gets out of the way
-- **Multi-persona** — run multiple AI personalities from one codebase, each with its own voice, sandbox, and bot token
-
-## Simpler than OpenClaw, narrower by choice
-
-[OpenClaw](https://github.com/openclaw/openclaw) is a brilliant Swiss army knife — 13+ chat channels (WhatsApp, Slack, Discord, Signal, iMessage, Telegram, Matrix, …), your infra, your keys. If you want every channel under one roof, run that.
-
-Toris is the opposite bet: **one channel (Telegram), one opinion about how voice-first agentic thinking should feel, built directly on top of Claude Code.** That narrowness buys you three things:
-
-- **One command to start.** `docker-compose up` and the bot is live. No web UI to self-host, no multi-channel adapter layer, no YAML to hand-edit. The rest of setup is conversational in Telegram via `/setup`.
-- **Your Claude subscription is the only auth.** Paste an OAuth token from `claude setup-token` into `/setup` and you're done. No `ANTHROPIC_API_KEY`, no API credits, no per-token billing. Same token as your `claude` CLI.
-- **Native Claude Code primitives, not bolted on.** Tool approval, sandbox isolation, session management, `/compact`, watch mode — these aren't features Toris reimplements. They're what the Claude Agent SDK already does, exposed through voice messages.
-
-If you need many channels and maximum flexibility, go to OpenClaw. If you want Claude Code in your pocket with a voice, stay here.
+Voice in, voice out. Full agent tools: Bash, Read, Grep, WebSearch, Edit, Write. Sandboxed writes. Persistent sessions you can resume, switch, search, and compact. Tool approval, watch mode, pluggable MCP memory. Multi-persona (run several bots from one codebase, each with its own voice and sandbox).
 
 ## Features
 
@@ -486,10 +454,10 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines and the test 
 
 ## How It Works
 
-You send a voice message. Bot downloads it and pipes it through the STT provider (ElevenLabs Scribe or OpenAI Whisper). The transcript goes to the Claude Agent SDK, which reaches for real tools — Bash, Read, Grep, WebSearch, Edit, Write — to actually accomplish what you asked. If watch mode is on, you see each tool call stream into the chat as it happens. If approve mode is on, Claude waits for a ✓ before running anything with side effects. The final response comes back as text, and the TTS provider (ElevenLabs or OpenAI) speaks it back into your headphones.
+Voice message arrives. STT transcribes it (ElevenLabs Scribe or OpenAI Whisper). The transcript goes to the Claude Agent SDK, which decides what tools to call and runs them. With watch mode on, tool calls stream into the chat live. With approve mode on, Claude waits for a ✓ before anything with side effects runs. The response comes back as text; TTS speaks it.
 
-The whole loop is usually a few seconds. No part of it is a wrapper around a single chat completion — the SDK runs a real agent loop, calling tools, reading results, deciding what to do next.
+Usually a few seconds end to end. The SDK runs a full agent loop, not a chat-completion wrapper.
 
 ## License
 
-[MIT](LICENSE) — built by [ToruAI](https://github.com/ToruAI). Fork it, change it, run your own persona.
+[MIT](LICENSE). Built by [ToruAI](https://github.com/ToruAI).
