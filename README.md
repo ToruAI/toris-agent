@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 
-**Claude Code as a Telegram voice bot. Runs on your Claude Pro/Max/Teams subscription. No API key needed.**
+**Claude Code as a personal agent. Runs on your Claude Pro/Max/Teams subscription. No API key needed.**
 
 In April 2026, Anthropic cut off subscription access for third-party wrappers like [OpenClaw](https://github.com/openclaw/openclaw), forcing them onto pay-per-token API keys. Toris still runs on subscription because it drives the Claude Agent SDK directly — the same SDK that powers the `claude` CLI in your terminal. Paste your `claude setup-token` OAuth into `/setup` and start talking.
 
