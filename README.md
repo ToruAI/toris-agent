@@ -3,13 +3,13 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 
-**Claude Code as a Telegram voice bot. Runs on your Claude Pro/Max/Teams subscription.**
+**Claude Code as a Telegram voice bot. Runs on your Claude Pro/Max/Teams subscription. No API key needed.**
 
-If you know [OpenClaw](https://github.com/openclaw/openclaw), think single-channel cousin: Telegram only, voice-first, built straight on the Claude Agent SDK. No Anthropic API key, no per-token billing. Paste your `claude setup-token` OAuth into `/setup` and start talking.
+In April 2026, Anthropic cut off subscription access for third-party wrappers like [OpenClaw](https://github.com/openclaw/openclaw), forcing them onto pay-per-token API keys. Toris still runs on subscription because it drives the Claude Agent SDK directly — the same SDK that powers the `claude` CLI in your terminal. Paste your `claude setup-token` OAuth into `/setup` and start talking.
 
 <!-- Demo GIF here -->
 
-Voice in, voice out. Full agent tools: Bash, Read, Grep, WebSearch, Edit, Write. Sandboxed writes. Persistent sessions you can resume, switch, search, and compact. Tool approval, watch mode, pluggable MCP memory. Multi-persona (run several bots from one codebase, each with its own voice and sandbox).
+Voice in, voice out. Full agent tools: Bash, Read, Grep, WebSearch, Edit, Write. Sandboxed writes. Persistent sessions you can resume, switch, search, and compact. Tool approval, watch mode, pluggable MCP memory. Multi-persona.
 
 ## Features
 
