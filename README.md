@@ -1,332 +1,478 @@
-<p align="center">
-  <strong>Claude Voice Assistant</strong><br>
-  <em>Voice-first interface to Claude's agentic capabilities</em>
-</p>
+# Toris Agent
 
-<p align="center">
-  <a href="#quick-start">Quick Start</a> |
-  <a href="#architecture">Architecture</a> |
-  <a href="#commands">Commands</a> |
-  <a href="#deployment">Deployment</a>
-</p>
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 
-<p align="center">
-  <img src="https://img.shields.io/badge/python-3.12+-3776ab?style=flat-square&logo=python&logoColor=white" alt="Python 3.12+">
-  <img src="https://img.shields.io/badge/Claude-Agent%20SDK-7c3aed?style=flat-square" alt="Claude Agent SDK">
-  <img src="https://img.shields.io/badge/Telegram-Bot-26a5e4?style=flat-square&logo=telegram&logoColor=white" alt="Telegram Bot">
-  <img src="https://img.shields.io/badge/ElevenLabs-TTS%20%2B%20STT-000000?style=flat-square" alt="ElevenLabs">
-  <img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="MIT License">
-</p>
+**A voice-first, agentic interface to Claude, delivered through Telegram.** Not another chatbot wrapper.
 
----
+<!-- Demo GIF here -->
 
-## Not Another Chatbot
+Send a voice message (or text, or a photo) and Claude can search the web, read your files, write and execute code in a sandbox, and respond with natural speech. All from Telegram — no SSH, no config files required after the first launch.
 
-Most "voice AI" projects wrap chat completions with speech-to-text. This is different.
+## What Makes This Different
 
-**Claude can actually do things:**
+Most "voice AI" projects are thin wrappers around chat completions. This is different:
 
-| You say... | Claude does... |
-|------------|----------------|
-| "Search for the latest on React Server Components" | Runs WebSearch, synthesizes findings, speaks the summary |
-| "Read my project's package.json and tell me what's outdated" | Uses Read tool, analyzes dependencies, responds with insights |
-| "Write a Python script that fetches my calendar" | Creates the file in sandbox, executes it, reports results |
-| "Find all TODO comments in the codebase" | Uses Grep across your files, summarizes what needs attention |
+- **Agentic execution** — Claude uses real tools (Bash, Read, Grep, WebSearch, Edit, Write) to solve problems, not just answer prompts
+- **Sandboxed safety** — all writes and code execution are confined to a designated sandbox directory
+- **Voice-native** — built for voice I/O from the ground up, with TTS/STT pluggable between ElevenLabs and OpenAI
+- **Zero-config onboarding** — configure Claude + voice credentials conversationally in Telegram via `/setup`, no SSH required
+- **Session persistence** — conversations continue across messages, across restarts, and can be listed, switched, searched, compacted
+- **Real-time control** — watch mode streams tool calls live; approve mode lets you authorize each action
+- **Multi-persona** — run multiple AI personalities from one codebase, each with their own voice, sandbox, and Telegram bot
 
-Full agentic loop. Voice in, action, voice out.
+## Features
 
----
+| Feature | Description |
+|---------|-------------|
+| Voice in/out | ElevenLabs or OpenAI — choose per-user via `/settings` |
+| Agentic execution | Claude Agent SDK with Bash, Read, Grep, WebSearch, Edit, Write |
+| Sandboxed writes | All writes and command execution confined to a sandbox directory |
+| Session management | `/new`, `/continue`, `/sessions`, `/switch`, `/search`, `/compact` |
+| Approval modes | "Go All" (auto) or "Approve" (confirm each tool call) |
+| Watch mode | Stream tool calls live to chat — Off / Live / Debug |
+| Automations | List & toggle scheduled tasks via `/automations` |
+| Conversational setup | `/setup` walks you through credentials + voice config in chat |
+| Token verification | Every credential is tested before it's saved |
+| Multi-persona | Run multiple AI personas from one codebase |
+| Topic filtering | Multiple personas in one Telegram group (forum topics) |
+| Rate limiting | 2s cooldown + 10/min per user |
+| Admin-gated setup | `ALLOWED_USER_IDS` + `ADMIN_USER_IDS` for multi-user chats |
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                              TELEGRAM LAYER                                  │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐ │
-│  │  Commands   │  │  Callbacks  │  │   Voice     │  │       Text          │ │
-│  │ /new /start │  │  Approve    │  │  Messages   │  │     Messages        │ │
-│  │ /settings   │  │  Settings   │  │             │  │                     │ │
-│  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘  └──────────┬──────────┘ │
-│         │                │                │                     │            │
-│         └────────────────┴────────┬───────┴─────────────────────┘            │
-│                                   │                                          │
-│                    ┌──────────────▼──────────────┐                           │
-│                    │       SECURITY GATES        │                           │
-│                    │  Chat ID → Topic → Rate     │                           │
-│                    └──────────────┬──────────────┘                           │
-└──────────────────────────────────┼──────────────────────────────────────────┘
-                                   │
-          ┌────────────────────────┼────────────────────────┐
-          │                        │                        │
-          ▼                        ▼                        ▼
-┌─────────────────┐     ┌─────────────────────┐     ┌──────────────────┐
-│  STATE MANAGER  │     │    VOICE ENGINE     │     │  SETTINGS STORE  │
-│                 │     │                     │     │                  │
-│ sessions_state  │     │  ┌───────────────┐  │     │  audio: on/off   │
-│   .json         │◄────┤  │ ElevenLabs    │  │     │  speed: 0.8-1.2  │
-│                 │     │  │ Scribe (STT)  │  │     │  mode: go_all/   │
-│ • current_sess  │     │  └───────┬───────┘  │     │        approve   │
-│ • session_ids[] │     │          │          │     │  watch: on/off   │
-│ • per-user      │     │          ▼          │     │                  │
-└────────┬────────┘     │     Transcript      │     └────────┬─────────┘
-         │              └──────────┬──────────┘              │
-         │                         │                         │
-         └─────────────────────────┼─────────────────────────┘
-                                   │
-                    ┌──────────────▼──────────────┐
-                    │      CLAUDE AGENT SDK       │
-                    │                             │
-                    │  ┌───────────────────────┐  │
-                    │  │    TOOL EXECUTION     │  │
-                    │  │                       │  │
-                    │  │  Read   Grep   Bash   │  │
-                    │  │  Write  Edit   Glob   │  │
-                    │  │  WebSearch  WebFetch  │  │
-                    │  └───────────┬───────────┘  │
-                    │              │              │
-                    │    ┌────────┴────────┐     │
-                    │    │                 │     │
-                    │    ▼                 ▼     │
-                    │ ┌──────┐       ┌────────┐  │
-                    │ │GO ALL│       │APPROVE │  │
-                    │ │ mode │       │  mode  │  │
-                    │ │      │       │        │  │
-                    │ │ Auto │       │ Human  │  │
-                    │ │      │       │ gate   │  │
-                    │ └──────┘       └───┬────┘  │
-                    │                    │       │
-                    │         ┌──────────▼─────┐ │
-                    │         │ Inline Button  │ │
-                    │         │ [Approve][Deny]│ │
-                    │         └────────────────┘ │
-                    │                             │
-                    │  ┌───────────────────────┐  │
-                    │  │    WATCH MODE         │  │
-                    │  │  Stream tool calls    │  │
-                    │  │  to Telegram live     │  │
-                    │  └───────────────────────┘  │
-                    │                             │
-                    └──────────────┬──────────────┘
-                                   │
-                    ┌──────────────▼──────────────┐
-                    │      VOICE ENGINE (TTS)     │
-                    │                             │
-                    │  ElevenLabs Turbo v2.5      │
-                    │  • Configurable voice       │
-                    │  • Speed: per-user          │
-                    │  • Expressive settings      │
-                    │                             │
-                    └──────────────┬──────────────┘
-                                   │
-                                   ▼
-                           Voice Response
+Telegram (voice / text / photo)
+        │
+        ▼
+┌──────────────────┐
+│  python-telegram │
+│       -bot       │
+└────────┬─────────┘
+         │
+    ┌────┴────┐
+    │   STT   │  ← ElevenLabs Scribe OR OpenAI Whisper (voice only)
+    └────┬────┘
+         ▼
+┌──────────────────┐
+│ Claude Agent SDK │  ← Bash, Read, Grep, WebSearch, Edit, Write
+│  + tool approval │
+│  + session mgmt  │
+└────────┬─────────┘
+         │
+    ┌────┴────┐
+    │   TTS   │  ← ElevenLabs OR OpenAI (if audio enabled)
+    └────┬────┘
+         ▼
+     Telegram
 ```
 
-### Data Flows
+## Prerequisites
 
-**Voice → Response (main path):**
-```
-Voice msg → Download → STT → Claude SDK → [Tools] → Response → TTS → Voice reply
-```
+- **Telegram Bot** — Create one via [@BotFather](https://t.me/botfather)
+- **Voice provider (optional)** — ElevenLabs *or* OpenAI API key. Can be configured later via `/setup` or skipped for text-only mode.
+- **Claude access** — API key or subscription OAuth token. Can be configured via `/setup` in Telegram.
 
-**Tool Approval (approve mode):**
-```
-Claude wants tool → Send button to Telegram → Wait for click → Allow/Deny → Continue
-```
+For Docker deployment: **Docker** and **Docker Compose**.
+For non-Docker deployment: **Python 3.11+** and **Node.js 20+** (for the Claude Code CLI).
 
-**Session Resume:**
-```
-/continue → Load session_id from state → Claude SDK continue_conversation=true → Context preserved
-```
+### Claude Authentication
 
-### Key Concepts
+Choose ONE of these methods:
 
-| Concept | Description |
-|---------|-------------|
-| **Sandbox** | Claude can only write/execute in isolated directory |
-| **Sessions** | Conversation context persists across messages and restarts |
-| **Watch Mode** | Real-time streaming of tool calls to Telegram |
-| **Approve Mode** | Human-in-the-loop for each tool execution |
-| **Multi-Persona** | Same codebase, different bot/voice/sandbox per personality |
+| Method | Best For | How |
+|--------|----------|-----|
+| **API Key** | Docker, CI/CD, teams | Paste `sk-ant-api-...` from [console.anthropic.com](https://console.anthropic.com) via `/setup`, or set `ANTHROPIC_API_KEY` in env |
+| **Subscription OAuth** | Personal use, Pro/Max/Teams plans | Run `claude setup-token` on any machine with a browser, paste the result via `/setup`, or set `CLAUDE_CODE_OAUTH_TOKEN` in env |
+| **Mounted credentials** | Docker with existing `claude /login` | Mount `~/.claude/.credentials.json` into the container (see docker-compose.yml) |
 
-### State Persistence
+## Deployment Options
 
-```
-sessions_state.json          user_settings.json
-┌─────────────────────┐      ┌─────────────────────┐
-│ "user_123": {       │      │ "user_123": {       │
-│   current: "abc..", │      │   audio: true,      │
-│   sessions: [...]   │      │   speed: 1.1,       │
-│ }                   │      │   mode: "go_all",   │
-│                     │      │   watch: false      │
-└─────────────────────┘      └─────────────────────┘
-```
-
----
-
-## Quick Start
-
-### Prerequisites
-
-- Python 3.12+
-- [Claude Code](https://claude.ai/code) installed (`npm install -g @anthropic-ai/claude-code`)
-- Telegram bot token from [@BotFather](https://t.me/botfather)
-- ElevenLabs API key from [elevenlabs.io](https://elevenlabs.io)
-
-### Setup
+### Option 1: Docker (Recommended for Production)
 
 ```bash
-git clone https://github.com/toruai/claude-voice-assistant.git
-cd claude-voice-assistant
+# Clone the repository
+git clone --recurse-submodules https://github.com/toruai/toris-agent.git
+cd toris-agent
 
-python -m venv .venv
-source .venv/bin/activate
+# Configure
+cp docker/toris.env.example docker/toris.env
+# Edit docker/toris.env — you only need TELEGRAM_BOT_TOKEN to start.
+# Everything else (Claude auth, voice provider) can be set via /setup in Telegram.
+
+# Start
+docker-compose up -d
+
+# View logs
+docker-compose logs -f toris
+
+# Stop
+docker-compose down
+```
+
+**Benefits:**
+- Isolated sandbox for file operations
+- Automatic restarts on failure
+- Persistent state across restarts (volumes)
+- No Python / Node installation on the host
+
+### Option 2: Non-Docker (systemd or foreground)
+
+```bash
+# Clone and setup
+git clone --recurse-submodules https://github.com/toruai/toris-agent.git
+cd toris-agent
+
+python -m venv venv
+source venv/bin/activate
 pip install -r requirements.txt
 
-cp .env.example .env
-# Edit .env with your credentials
+# Install Claude Code CLI
+npm install -g @anthropic-ai/claude-code
 
+# Configure — only TELEGRAM_BOT_TOKEN is needed to start
+cp .env.example .env
+# Edit .env with your bot token
+
+# Run
 python bot.py
 ```
 
-Send a voice message to your bot. That's it.
+See [Systemd Deployment](#systemd-deployment) for a production unit file.
+
+---
+
+## First-time setup via Telegram
+
+After starting the bot for the first time, open your Telegram chat and run `/setup`. The bot walks you through a conversational onboarding:
+
+1. **Name** — how the bot should address you
+2. **Claude auth** — choose API Key or OAuth (Claude Pro/Max/Teams subscription)
+   - **API Key**: paste your `sk-ant-api-...` from [console.anthropic.com](https://console.anthropic.com)
+   - **OAuth**: run `claude setup-token` on any machine with a browser, paste the result
+3. **Voice provider** — ElevenLabs, OpenAI, or skip (text-only)
+4. **Verification** — the bot tests every credential against the live API before saving
+
+Your tokens are deleted from the Telegram chat immediately after being verified and stored. You can re-run `/setup` at any time, or use targeted commands: `/claude_token`, `/elevenlabs_key`, `/openai_key`.
+
+If a message delete fails (missing Telegram permissions), the bot refuses to save the token and asks you to delete it manually — no token ever stays visible in chat.
 
 ---
 
 ## Configuration
 
-### Required Variables
+### Required environment variables
 
 | Variable | Description |
 |----------|-------------|
-| `TELEGRAM_BOT_TOKEN` | From @BotFather |
-| `TELEGRAM_DEFAULT_CHAT_ID` | Your chat ID (security restriction) |
-| `ELEVENLABS_API_KEY` | From elevenlabs.io |
+| `TELEGRAM_BOT_TOKEN` | Bot token from [@BotFather](https://t.me/botfather) |
+| `TELEGRAM_DEFAULT_CHAT_ID` | Your Telegram chat ID (security: only this chat can use the bot; set to `0` during first setup, then lock it down) |
 
-### Optional Variables
+### Auth — configure one or more (or do it via `/setup` in Telegram)
+
+| Variable | Purpose |
+|----------|---------|
+| `ANTHROPIC_API_KEY` | Claude API access via API key |
+| `CLAUDE_CODE_OAUTH_TOKEN` | Claude via subscription OAuth (Pro/Max/Teams) |
+| `ELEVENLABS_API_KEY` | ElevenLabs voice provider |
+| `OPENAI_API_KEY` | OpenAI voice provider |
+
+### Optional environment variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `PERSONA_NAME` | `Assistant` | Display name in logs |
-| `SYSTEM_PROMPT_FILE` | - | Path to persona prompt (e.g., `prompts/v.md`) |
-| `ELEVENLABS_VOICE_ID` | `JBFqnCBsd6RMkjVDRZzb` | ElevenLabs voice ID |
-| `TELEGRAM_TOPIC_ID` | - | Filter to specific forum topic |
-| `CLAUDE_WORKING_DIR` | `/home/dev` | Directory Claude can read |
-| `CLAUDE_SANDBOX_DIR` | `/home/dev/claude-voice-sandbox` | Directory Claude can write/execute |
-| `MAX_VOICE_RESPONSE_CHARS` | `500` | Max TTS characters |
-| `LOG_LEVEL` | `INFO` | Logging verbosity |
+| `TELEGRAM_ALLOWED_USER_IDS` | (empty) | Comma-separated user IDs; empty = all users in chat allowed |
+| `TELEGRAM_ADMIN_USER_IDS` | (empty) | Comma-separated admin IDs; empty = all authorized users are admins |
+| `TELEGRAM_TOPIC_ID` | (empty) | Restrict bot to a specific Telegram forum topic |
+| `PERSONA_NAME` | `Assistant` | Display name in logs / greetings |
+| `SYSTEM_PROMPT_FILE` | (default minimal) | Path to a persona prompt file (e.g. `prompts/toris.md`) |
+| `TTS_PROVIDER` | auto-detect | `elevenlabs` or `openai` |
+| `STT_PROVIDER` | auto-detect | `elevenlabs` or `openai` |
+| `STT_LANGUAGE` | auto | e.g. `en`, `pl` |
+| `ELEVENLABS_VOICE_ID` | `JBFqnCBsd6RMkjVDRZzb` (George) | See [ElevenLabs voice library](https://elevenlabs.io/app/voice-library) |
+| `OPENAI_VOICE_ID` | `coral` | OpenAI voices: `alloy`, `ash`, `ballad`, `cedar`, `coral`, `echo`, `fable`, `juniper`, `marin`, `onyx`, `nova`, `sage`, `shimmer`, `verse` |
+| `OPENAI_TTS_MODEL` | `gpt-4o-mini-tts` | Or `tts-1`, `tts-1-hd` |
+| `OPENAI_STT_MODEL` | `whisper-1` | Or `gpt-4o-mini-transcribe`, `gpt-4o-transcribe` |
+| `MAX_VOICE_RESPONSE_CHARS` | `500` | Truncate TTS input (controls cost) |
+| `CLAUDE_TIMEOUT` | `300` | Max seconds to wait for a Claude response |
+| `CLAUDE_WORKING_DIR` | `$HOME` | Directory Claude can read from |
+| `CLAUDE_SANDBOX_DIR` | `$HOME/claude-sandbox` | Directory Claude can write to and execute in |
+| `LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` |
 
----
+## User Settings
 
-## Commands
+Use `/settings` in Telegram to configure per-user preferences:
 
-| Command | Description |
-|---------|-------------|
-| `/start` | Show help |
-| `/new [name]` | Start new conversation session |
-| `/continue` | Resume last session |
-| `/sessions` | List all sessions |
-| `/switch <id>` | Switch to specific session |
-| `/status` | Current session info |
-| `/settings` | Configure mode, audio, voice speed |
-| `/health` | System health check |
-
-### Settings Menu
-
-Access via `/settings`:
-
-- **Mode**: "Go All" (auto-approve all tools) or "Approve" (confirm each action)
-- **Watch**: Stream tool calls to chat in real-time
-- **Audio**: Enable/disable voice responses
-- **Speed**: Voice playback speed (0.8x - 1.2x)
-
----
+- **Mode** — Go All (auto-approve tools) or Approve (confirm each tool call)
+- **Watch** — Off / Live (tool calls as they happen) / Debug (full SDK events)
+- **Audio** — voice responses on/off
+- **Speed** — voice playback speed (0.8x – 1.3x)
+- **Automation cards** — compact or full display style
 
 ## Multi-Persona Setup
 
-Run multiple AI personalities, each with their own bot, voice, and sandbox.
+Run multiple AI personalities from the same codebase. Each gets its own:
+- Telegram bot
+- Voice and personality
+- Sandbox directory
+- Topic filter (for group chats)
 
-### Example Personas
+### Docker multi-persona
 
-| Persona | Purpose | Prompt |
-|---------|---------|--------|
-| V | General assistant with personality | `prompts/v.md` |
-| TC | TORIS Copilot - business-focused partner | `prompts/tc.md` |
+Duplicate the service in `docker-compose.yml` with different env files:
 
-### Running Multiple Instances
+```yaml
+services:
+  toris:
+    env_file: docker/toris.env
+    volumes:
+      - toris-state:/home/claude/state
+      - toris-sandbox:/home/claude/sandbox
 
-Create separate environment files (see `docker/toris.env` as template):
+  assistant2:
+    env_file: docker/assistant2.env
+    volumes:
+      - assistant2-state:/home/claude/state
+      - assistant2-sandbox:/home/claude/sandbox
+```
 
-Each persona gets:
-- Its own Telegram bot token
-- Unique voice ID
-- Isolated sandbox directory
-- Optional topic filter (for group chats)
+### Persona prompt
 
-### Systemd Service Example
+See `prompts/toris.md` for the default persona. Key elements:
+
+```markdown
+# TORIS — Your Second Brain
+
+You are TORIS, a voice-powered thinking partner built on Claude.
+
+## Your Capabilities
+- READ files from {read_dir}
+- WRITE and EXECUTE in {sandbox_dir}
+- Web search, research, note-taking
+
+## CRITICAL — Voice Output Rules
+- NO markdown formatting
+- Speak in natural flowing sentences
+```
+
+---
+
+## Docker Deployment Guide
+
+### Building and running
+
+```bash
+# Build the image
+docker-compose build
+
+# Start
+docker-compose up -d
+
+# View logs
+docker-compose logs -f toris
+
+# Restart
+docker-compose restart toris
+
+# Stop
+docker-compose down
+
+# Stop and remove volumes (WARNING: deletes session history)
+docker-compose down -v
+```
+
+### Configuration
+
+```bash
+cp docker/toris.env.example docker/toris.env
+# Edit docker/toris.env — you only need TELEGRAM_BOT_TOKEN to start.
+```
+
+See the **Configuration** section above for the full env var reference.
+
+### Credentials for subscription users
+
+If you want to use an existing `claude /login` session from your host machine:
+
+```yaml
+# In docker-compose.yml, uncomment:
+- ~/.claude/.credentials.json:/home/claude/.claude/.credentials.json:ro
+```
+
+### Data persistence
+
+| Volume | Contents | Location |
+|--------|----------|----------|
+| `toris-state` | Session history & user settings | `/home/claude/state` |
+| `toris-sandbox` | File operations sandbox | `/home/claude/sandbox` |
+| `toris-claude-config` | Claude credentials & settings | `/home/claude/.claude` |
+
+**Backup state:**
+```bash
+docker cp claude-voice-toris:/home/claude/state ./backup-state
+```
+
+### Health checks
+
+```bash
+docker-compose ps
+docker-compose logs -f toris
+```
+
+---
+
+## Systemd Deployment
+
+For non-Docker production deployments on Linux.
+
+### Setup
+
+```bash
+# Create deployment directory
+sudo mkdir -p /opt/toris-agent
+cd /opt/toris-agent
+
+# Clone and install
+sudo git clone --recurse-submodules https://github.com/toruai/toris-agent.git .
+sudo python3 -m venv venv
+sudo venv/bin/pip install -r requirements.txt
+
+# Install Claude Code globally
+sudo npm install -g @anthropic-ai/claude-code
+
+# Create config
+sudo mkdir -p /etc/toris-agent
+sudo cp .env.example /etc/toris-agent/toris-agent.env
+sudo $EDITOR /etc/toris-agent/toris-agent.env
+```
+
+### Service file
+
+Create `/etc/systemd/system/toris-agent.service`:
 
 ```ini
 [Unit]
-Description=Claude Voice Assistant - V
+Description=Toris Agent — Claude voice bot for Telegram
 After=network.target
 
 [Service]
 Type=simple
-User=dev
-WorkingDirectory=/path/to/claude-voice-assistant
-EnvironmentFile=/home/dev/voice-agents/v.env
-ExecStart=/path/to/.venv/bin/python bot.py
+User=claude
+Group=claude
+WorkingDirectory=/opt/toris-agent
+EnvironmentFile=/etc/toris-agent/toris-agent.env
+ExecStart=/opt/toris-agent/venv/bin/python bot.py
 Restart=always
+RestartSec=10
+
+# Security
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/toris-agent/sandbox /var/lib/toris-agent/state
 
 [Install]
 WantedBy=multi-user.target
 ```
 
----
-
-## Deployment
-
-### Production Setup
-
-1. Clone repo on your server
-2. Set up Python environment
-3. Configure `.env`
-4. Run with systemd or supervisor
-
----
-
-## Security
-
-| Protection | Description |
-|------------|-------------|
-| Chat ID restriction | Only configured chat ID can interact |
-| Sandbox isolation | Claude can only write/execute in sandbox directory |
-| Rate limiting | 2s cooldown, 10 messages/minute per user |
-| Approval mode | Optional manual authorization for each tool call |
-
----
-
-## Development
+### Create user and directories
 
 ```bash
-pip install pytest pytest-asyncio pytest-cov
+sudo useradd -r -s /bin/false claude
+sudo mkdir -p /var/lib/toris-agent/{state,sandbox}
+sudo chown -R claude:claude /var/lib/toris-agent
+echo "CLAUDE_SANDBOX_DIR=/var/lib/toris-agent/sandbox" | sudo tee -a /etc/toris-agent/toris-agent.env
+echo "STATE_DIR=/var/lib/toris-agent/state" | sudo tee -a /etc/toris-agent/toris-agent.env
+```
 
-pytest test_bot.py -v
-pytest test_bot.py --cov=bot --cov-report=term-missing
+### Manage the service
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable toris-agent
+sudo systemctl start toris-agent
+
+sudo systemctl status toris-agent
+sudo journalctl -u toris-agent -f
 ```
 
 ---
 
-## Architecture Decisions
+## Bot Commands
 
-- **ElevenLabs Scribe** for STT - handles accents and ambient noise well
-- **ElevenLabs Turbo v2.5** for TTS - low latency with expressive voice settings
-- **Claude Agent SDK** - official SDK, not subprocess shelling to CLI
-- **python-telegram-bot** - mature async library with good typing
-- **Sandboxed by default** - never trust an AI with full filesystem access
+| Command | Description |
+|---------|-------------|
+| `/start` | Welcome / help |
+| `/setup` | Conversational credential setup |
+| `/health` | System & provider health check |
+| `/new [name]` | Start a new session |
+| `/continue` | Resume the last session |
+| `/sessions` | List recent sessions |
+| `/switch <id>` | Switch to a session by ID |
+| `/search <term>` | Search sessions by keyword |
+| `/cancel` | Cancel the current request |
+| `/compact` | Summarize & compress the current session |
+| `/status` | Current session info |
+| `/settings` | Voice, mode, speed, watch mode |
+| `/automations` | List & toggle scheduled automations |
 
----
+## Security Considerations
 
-<p align="center">
-  <strong>ToruAI</strong> | MIT License | 2026
-</p>
+- **Chat ID restriction** — only the configured chat ID can interact with the bot
+- **Per-user allowlist** — `TELEGRAM_ALLOWED_USER_IDS` restricts which users are authorized inside that chat
+- **Admin gating** — `TELEGRAM_ADMIN_USER_IDS` restricts `/setup` and credential commands
+- **Anonymous denied** — when an allowlist is configured, anonymous / channel posts are rejected
+- **Sandbox isolation** — Claude can only write / execute in the sandbox directory
+- **Rate limiting** — 2s cooldown + 10/min per user
+- **Token hygiene** — onboarding tokens are deleted from chat before saving; if delete fails, the bot refuses to save
+- **No secrets in prompts** — keep API keys in env / `/setup`, never in persona prompt files
+
+## Architecture
+
+```
+bot.py                 # Handler registration + startup
+handlers/
+  session.py           # /start /new /continue /sessions /switch /status /cancel /compact /search
+  admin.py             # /setup /claude_token /elevenlabs_key /openai_key + settings callbacks
+  messages.py          # voice / text / photo / onboarding / automations callbacks
+auth.py                # Authorization, rate limiting, topic filtering
+state_manager.py       # Thread-safe sessions + settings with atomic persistence
+claude_service.py      # Claude Agent SDK wrapper + working indicator
+voice_service.py       # TTS/STT with provider failover + health checks
+automations.py         # RemoteTrigger integration
+shared_state.py        # Cross-module pending approvals + cancel events
+config.py              # Env var single source of truth
+prompts/               # Persona prompt files
+tests/                 # 170+ unit tests (uses asyncio.run, not pytest-asyncio)
+```
+
+## Development
+
+```bash
+source venv/bin/activate
+pip install -r requirements.txt
+
+# Run tests
+pytest tests/ -v
+
+# With coverage
+pytest tests/ --cov=. --cov-report=term-missing
+```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines and the test convention.
+
+## How It Works
+
+1. **Voice input** — Telegram receives a voice message, bot downloads it
+2. **Transcription** — the active STT provider converts speech to text
+3. **Processing** — Claude Agent SDK processes the request with full tool access
+4. **Tool execution** — Claude uses tools in a sandbox (or asks for approval first, depending on mode)
+5. **Response** — the text response is sent to chat (with live tool-call streaming if watch mode is on)
+6. **Voice output** — the active TTS provider converts the response to speech, if audio is enabled
+
+The Claude Agent SDK provides real agentic capabilities — Claude autonomously uses multiple tools to accomplish tasks, not just respond to prompts.
+
+## License
+
+[MIT](LICENSE) — ToruAI 2026

@@ -18,6 +18,7 @@ bot.log
 # State files (user-specific, not for repo)
 sessions_state.json
 user_settings.json
+settings.json
 
 # Test artifacts
 .coverage
@@ -34,3 +35,17 @@ htmlcov/
 .vscode/
 *.swp
 *.swo
+credentials.json
+.superpowers/
+
+# Internal planning / scratch
+docs/superpowers/
+sandbox/
+
+# Dev utilities (not part of public release)
+debug_*.py
+test_elevenlabs.py
+test_integration.py
+
+# Dev-only root test artifacts
+test_tts_output.*

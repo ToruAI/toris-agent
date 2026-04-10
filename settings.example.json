@@ -1,8 +1,14 @@
 {
   "permissions": {
     "allow": [
-      "Edit(//home/dev/your-sandbox-path/**)",
-      "Write(//home/dev/your-sandbox-path/**)"
+      "Edit(/your/sandbox/path/**)",
+      "Write(/your/sandbox/path/**)"
     ]
+  },
+  "mcpServers": {
+    "megg": {
+      "command": "npx",
+      "args": ["-y", "megg@latest"]
+    }
   }
 }
