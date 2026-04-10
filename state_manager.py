@@ -7,6 +7,8 @@ StateManager.init(). Access the singleton with get_manager().
 import asyncio
 import json
 import logging
+import os
+import tempfile
 import threading
 from pathlib import Path
 from typing import Any
@@ -76,14 +78,17 @@ class StateManager:
             return {}
 
     def _save_json(self, path: Path, data: dict):
-        """Write atomically: .tmp then rename."""
-        tmp = Path(str(path) + ".tmp")
+        """Write atomically: unique temp file then rename (safe under concurrency)."""
+        tmp_path = None
         try:
-            tmp.write_text(json.dumps(data, indent=2))
-            tmp.replace(path)
+            fd, tmp_path = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
+            with os.fdopen(fd, "w") as f:
+                json.dump(data, f, indent=2)
+            Path(tmp_path).replace(path)
         except OSError as e:
             logger.error(f"Failed to save {path}: {e}")
-            tmp.unlink(missing_ok=True)
+            if tmp_path:
+                Path(tmp_path).unlink(missing_ok=True)
 
     def save_state(self):
         self._save_json(self.state_file, self._sessions)

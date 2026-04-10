@@ -221,11 +221,11 @@ async def cmd_health(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status = []
     status.append("=== Health Check ===\n")
 
-    # TTS provider check (uses voice_service's current clients, not stale copies)
-    status.append(f"TTS Provider: {TTS_PROVIDER}")
+    # TTS/STT provider — read from voice_service (current state, not stale import-time copy)
+    status.append(f"TTS Provider: {voice_service._tts_provider}")
     status.append(await voice_service.health_check_tts())
 
-    status.append(f"STT Provider: {STT_PROVIDER}")
+    status.append(f"STT Provider: {voice_service._stt_provider}")
 
     # Check Claude
     try:

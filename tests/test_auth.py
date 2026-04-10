@@ -123,6 +123,15 @@ class TestAllowedUserIds:
             effective_user = None
         assert auth._is_authorized(FakeUpdate()) is True
 
+    def test_none_user_denied_when_allowed_users_set(self, monkeypatch):
+        """Anonymous/channel posts must be denied when ALLOWED_USER_IDS is configured."""
+        monkeypatch.setattr(auth, "_cfg", self._make_cfg(allowed_user_ids={100, 200}))
+        class FakeUpdate:
+            class effective_chat:
+                id = 1
+            effective_user = None
+        assert auth._is_authorized(FakeUpdate()) is False
+
 
 class TestShouldHandleMessageInvalidTopicId:
     def test_invalid_topic_id_warns_and_handles_all(self, monkeypatch):

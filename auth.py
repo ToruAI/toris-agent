@@ -38,8 +38,9 @@ def _is_authorized(update) -> bool:
     """Return True if the chat AND user are authorized to use this bot."""
     if _cfg.ALLOWED_CHAT_ID != 0 and update.effective_chat.id != _cfg.ALLOWED_CHAT_ID:
         return False
-    if _cfg.ALLOWED_USER_IDS and update.effective_user and update.effective_user.id not in _cfg.ALLOWED_USER_IDS:
-        return False
+    if _cfg.ALLOWED_USER_IDS:
+        if not update.effective_user or update.effective_user.id not in _cfg.ALLOWED_USER_IDS:
+            return False
     return True
 
 

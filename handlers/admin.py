@@ -172,8 +172,13 @@ async def cmd_claude_token(update: Update, context: ContextTypes.DEFAULT_TYPE):
     creds["claude_token"] = token
     save_credentials(creds)
 
-    # Apply immediately
-    os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = token
+    # Apply immediately — route to correct env var
+    if token.startswith("sk-ant-api"):
+        os.environ["ANTHROPIC_API_KEY"] = token
+        os.environ.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
+    else:
+        os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = token
+        os.environ.pop("ANTHROPIC_API_KEY", None)
 
     await update.effective_chat.send_message(
         "✓ Claude token saved and applied!",

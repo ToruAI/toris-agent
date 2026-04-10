@@ -101,12 +101,17 @@ async def _handle_onboarding(update, context, settings, step):
         return
 
     if step == "awaiting_api_key":
+        thread_id = update.message.message_thread_id
         try:
             await update.message.delete()
         except Exception:
-            pass
+            await update.effective_chat.send_message(
+                "⚠️ Couldn't delete your message. Token NOT saved.\n"
+                "Delete the message manually, then try again.",
+                message_thread_id=thread_id,
+            )
+            return
 
-        thread_id = update.message.message_thread_id
         token = text.strip()
 
         if not token.startswith("sk-ant-"):
@@ -122,12 +127,17 @@ async def _handle_onboarding(update, context, settings, step):
         return
 
     if step == "awaiting_oauth_token":
+        thread_id = update.message.message_thread_id
         try:
             await update.message.delete()
         except Exception:
-            pass
+            await update.effective_chat.send_message(
+                "⚠️ Couldn't delete your message. Token NOT saved.\n"
+                "Delete the message manually, then try again.",
+                message_thread_id=thread_id,
+            )
+            return
 
-        thread_id = update.message.message_thread_id
         token = text.strip()
 
         if len(token) < 20:
@@ -143,12 +153,17 @@ async def _handle_onboarding(update, context, settings, step):
         return
 
     if step == "awaiting_elevenlabs_key":
+        thread_id = update.message.message_thread_id
         try:
             await update.message.delete()
         except Exception:
-            pass
+            await update.effective_chat.send_message(
+                "⚠️ Couldn't delete your message. Key NOT saved.\n"
+                "Delete the message manually, then try again.",
+                message_thread_id=thread_id,
+            )
+            return
 
-        thread_id = update.message.message_thread_id
         key = text.strip()
 
         verifying = await update.effective_chat.send_message("Verifying ElevenLabs key...", message_thread_id=thread_id)
@@ -162,12 +177,17 @@ async def _handle_onboarding(update, context, settings, step):
         return
 
     if step == "awaiting_openai_key":
+        thread_id = update.message.message_thread_id
         try:
             await update.message.delete()
         except Exception:
-            pass
+            await update.effective_chat.send_message(
+                "⚠️ Couldn't delete your message. Key NOT saved.\n"
+                "Delete the message manually, then try again.",
+                message_thread_id=thread_id,
+            )
+            return
 
-        thread_id = update.message.message_thread_id
         key = text.strip()
 
         verifying = await update.effective_chat.send_message("Verifying OpenAI key...", message_thread_id=thread_id)
@@ -264,9 +284,41 @@ async def handle_onboarding_callback(update, context):
     settings = get_manager().get_user_settings(user_id)
     step = settings.get("onboarding")
 
-    if step == "awaiting_auth_choice":
-        choice = query.data
+    choice = query.data
 
+    # ── Back buttons ──────────────────────────────────────────
+    if choice == "onboard_back_auth":
+        settings["onboarding"] = "awaiting_auth_choice"
+        get_manager().save_settings()
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔑 API Key", callback_data="onboard_api")],
+            [InlineKeyboardButton("🔐 OAuth (Claude subscription)", callback_data="onboard_oauth")],
+        ])
+        await query.edit_message_text(
+            "How would you like to connect Claude?",
+            reply_markup=keyboard,
+        )
+        return
+
+    if choice == "onboard_back_voice":
+        settings["onboarding"] = "awaiting_voice_choice"
+        get_manager().save_settings()
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔊 ElevenLabs", callback_data="onboard_elevenlabs")],
+            [InlineKeyboardButton("🔊 OpenAI", callback_data="onboard_openai")],
+            [InlineKeyboardButton("⏩ Skip (text only)", callback_data="onboard_skip_voice")],
+        ])
+        await query.edit_message_text(
+            "Want voice responses? Choose a provider or skip:",
+            reply_markup=keyboard,
+        )
+        return
+
+    # ── Auth choice ───────────────────────────────────────────
+    _back_auth = InlineKeyboardMarkup([[InlineKeyboardButton("↩ Back", callback_data="onboard_back_auth")]])
+    _back_voice = InlineKeyboardMarkup([[InlineKeyboardButton("↩ Back", callback_data="onboard_back_voice")]])
+
+    if step == "awaiting_auth_choice":
         if choice == "onboard_api":
             settings["onboarding"] = "awaiting_api_key"
             get_manager().save_settings()
@@ -275,7 +327,8 @@ async def handle_onboarding_callback(update, context):
                 "1. Go to: https://console.anthropic.com/settings/keys\n"
                 "2. Create a key and paste it here\n\n"
                 "It starts with `sk-ant-`. I'll delete your message right away for security.",
-                parse_mode="Markdown"
+                parse_mode="Markdown",
+                reply_markup=_back_auth,
             )
 
         elif choice == "onboard_oauth":
@@ -288,12 +341,11 @@ async def handle_onboarding_callback(update, context):
                 "2. Log in when the browser opens\n"
                 "3. Copy the token and paste it here\n\n"
                 "I'll delete your message right away for security.",
-                parse_mode="Markdown"
+                parse_mode="Markdown",
+                reply_markup=_back_auth,
             )
 
     elif step == "awaiting_voice_choice":
-        choice = query.data
-
         if choice == "onboard_elevenlabs":
             settings["onboarding"] = "awaiting_elevenlabs_key"
             get_manager().save_settings()
@@ -301,7 +353,8 @@ async def handle_onboarding_callback(update, context):
                 "Paste your ElevenLabs API key below.\n\n"
                 "Get one at: https://elevenlabs.io/app/settings/api-keys\n\n"
                 "I'll delete your message right away for security.",
-                parse_mode="Markdown"
+                parse_mode="Markdown",
+                reply_markup=_back_voice,
             )
 
         elif choice == "onboard_openai":
@@ -311,7 +364,8 @@ async def handle_onboarding_callback(update, context):
                 "Paste your OpenAI API key below.\n\n"
                 "Get one at: https://platform.openai.com/api-keys\n\n"
                 "I'll delete your message right away for security.",
-                parse_mode="Markdown"
+                parse_mode="Markdown",
+                reply_markup=_back_voice,
             )
 
         elif choice == "onboard_skip_voice":
