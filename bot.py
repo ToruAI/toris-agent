@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-Claude Voice Assistant - Telegram Bot
-Voice messages -> ElevenLabs Scribe -> Claude Code SDK -> ElevenLabs TTS -> Voice response
+Toris Agent - Telegram Bot
+Voice / text / photo -> Claude Agent SDK (with tools) -> voice or text response.
+STT and TTS are pluggable between ElevenLabs and OpenAI.
 """
 
 import os

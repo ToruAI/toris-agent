@@ -1,4 +1,4 @@
-# TORIS Claude Voice Assistant — Project Instructions
+# Toris Agent — Project Instructions
 
 ## Specs
 

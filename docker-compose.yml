@@ -1,4 +1,4 @@
-# TORIS Claude Voice Assistant - Docker Compose
+# Toris Agent - Docker Compose
 #
 # Quick start:
 #   cp docker/toris.env.example docker/toris.env
