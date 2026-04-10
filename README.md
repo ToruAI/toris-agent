@@ -11,6 +11,8 @@ Toris is a voice-first thinking partner that lives in Telegram. You walk, you ta
 
 It's not here to wait for orders. It's here to think *with* you, offload what's in your head, and hand it back when you're ready to act.
 
+And it runs on your **Claude Pro / Max / Teams subscription** — the same OAuth token that powers your `claude` CLI at the terminal. No API credits to top up, no per-token billing, no separate Anthropic bill.
+
 ## Why It Exists
 
 Most "AI assistants" are a text box you type at. Fine when you're at a desk. But the most useful thinking — half-formed ideas, "wait, what if…", the stuff you'd say out loud to a smart friend — happens when you're walking, driving, or pacing around the kitchen. Nowhere near a keyboard.
@@ -28,6 +30,18 @@ Toris is built on the Claude Agent SDK, which means real tools — Bash, Read, G
 - **Session continuity** — conversations persist across messages, restarts, and days; navigate them with `/sessions`, `/search`, `/switch`, `/compact`
 - **Per-tool approval** — "Approve" mode lets you authorize each action before it runs; "Go All" gets out of the way
 - **Multi-persona** — run multiple AI personalities from one codebase, each with its own voice, sandbox, and bot token
+
+## Simpler than OpenClaw, narrower by choice
+
+[OpenClaw](https://github.com/openclaw/openclaw) is a brilliant Swiss army knife — 13+ chat channels (WhatsApp, Slack, Discord, Signal, iMessage, Telegram, Matrix, …), your infra, your keys. If you want every channel under one roof, run that.
+
+Toris is the opposite bet: **one channel (Telegram), one opinion about how voice-first agentic thinking should feel, built directly on top of Claude Code.** That narrowness buys you three things:
+
+- **One command to start.** `docker-compose up` and the bot is live. No web UI to self-host, no multi-channel adapter layer, no YAML to hand-edit. The rest of setup is conversational in Telegram via `/setup`.
+- **Your Claude subscription is the only auth.** Paste an OAuth token from `claude setup-token` into `/setup` and you're done. No `ANTHROPIC_API_KEY`, no API credits, no per-token billing. Same token as your `claude` CLI.
+- **Native Claude Code primitives, not bolted on.** Tool approval, sandbox isolation, session management, `/compact`, watch mode — these aren't features Toris reimplements. They're what the Claude Agent SDK already does, exposed through voice messages.
+
+If you need many channels and maximum flexibility, go to OpenClaw. If you want Claude Code in your pocket with a voice, stay here.
 
 ## Features
 
