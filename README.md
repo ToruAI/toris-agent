@@ -3,23 +3,31 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 
-**A voice-first, agentic interface to Claude, delivered through Telegram.** Not another chatbot wrapper.
+**A second brain you can talk to out loud.**
 
 <!-- Demo GIF here -->
 
-Send a voice message (or text, or a photo) and Claude can search the web, read your files, write and execute code in a sandbox, and respond with natural speech. All from Telegram — no SSH, no config files required after the first launch.
+Toris is a voice-first thinking partner that lives in Telegram. You walk, you talk, it listens — and unlike a chatbot, it actually *does* things. It researches the market while you're still mid-sentence. It pushes back when an idea doesn't hold up. It remembers what you said last week. It writes and runs the code when you're ready to stop thinking and start building.
 
-## What Makes This Different
+It's not here to wait for orders. It's here to think *with* you, offload what's in your head, and hand it back when you're ready to act.
 
-Most "voice AI" projects are thin wrappers around chat completions. This is different:
+## Why It Exists
 
-- **Agentic execution** — Claude uses real tools (Bash, Read, Grep, WebSearch, Edit, Write) to solve problems, not just answer prompts
-- **Sandboxed safety** — all writes and code execution are confined to a designated sandbox directory
-- **Voice-native** — built for voice I/O from the ground up, with TTS/STT pluggable between ElevenLabs and OpenAI
-- **Zero-config onboarding** — configure Claude + voice credentials conversationally in Telegram via `/setup`, no SSH required
-- **Session persistence** — conversations continue across messages, across restarts, and can be listed, switched, searched, compacted
-- **Real-time control** — watch mode streams tool calls live; approve mode lets you authorize each action
-- **Multi-persona** — run multiple AI personalities from one codebase, each with their own voice, sandbox, and Telegram bot
+Most "AI assistants" are a text box you type at. Fine when you're at a desk. But the most useful thinking — half-formed ideas, "wait, what if…", the stuff you'd say out loud to a smart friend — happens when you're walking, driving, or pacing around the kitchen. Nowhere near a keyboard.
+
+Voice chatbots exist, sure. But they're wrappers around chat completions: they can't read your files, can't search the web, can't write a script and run it, can't remember yesterday. Parrots with good diction.
+
+Toris is built on the Claude Agent SDK, which means real tools — Bash, Read, Grep, WebSearch, Edit, Write — all reachable through a voice message in Telegram. Say *"check if anyone's already built this and if not, scaffold it in the sandbox"* and it will. Say *"remember that"* and it will, via a pluggable MCP memory server. Say nothing for two days and come back to `/continue` where you left off.
+
+## What It's Good At
+
+- **Walking-around thinking** — pace around, dump half-formed ideas, get real push-back instead of validation theater
+- **Reality-checking** — searches the web to ground ideas in what actually exists, before you spend a week building the wrong thing
+- **Remembering** — notes and threads persist across sessions; the default persona uses [MEGG](https://www.npmjs.com/package/megg), but any MCP memory server works
+- **Doing the work** — when you're ready, it writes and executes code in a sandbox instead of just describing it
+- **Session continuity** — conversations persist across messages, restarts, and days; navigate them with `/sessions`, `/search`, `/switch`, `/compact`
+- **Per-tool approval** — "Approve" mode lets you authorize each action before it runs; "Go All" gets out of the way
+- **Multi-persona** — run multiple AI personalities from one codebase, each with its own voice, sandbox, and bot token
 
 ## Features
 
@@ -464,15 +472,10 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines and the test 
 
 ## How It Works
 
-1. **Voice input** — Telegram receives a voice message, bot downloads it
-2. **Transcription** — the active STT provider converts speech to text
-3. **Processing** — Claude Agent SDK processes the request with full tool access
-4. **Tool execution** — Claude uses tools in a sandbox (or asks for approval first, depending on mode)
-5. **Response** — the text response is sent to chat (with live tool-call streaming if watch mode is on)
-6. **Voice output** — the active TTS provider converts the response to speech, if audio is enabled
+You send a voice message. Bot downloads it and pipes it through the STT provider (ElevenLabs Scribe or OpenAI Whisper). The transcript goes to the Claude Agent SDK, which reaches for real tools — Bash, Read, Grep, WebSearch, Edit, Write — to actually accomplish what you asked. If watch mode is on, you see each tool call stream into the chat as it happens. If approve mode is on, Claude waits for a ✓ before running anything with side effects. The final response comes back as text, and the TTS provider (ElevenLabs or OpenAI) speaks it back into your headphones.
 
-The Claude Agent SDK provides real agentic capabilities — Claude autonomously uses multiple tools to accomplish tasks, not just respond to prompts.
+The whole loop is usually a few seconds. No part of it is a wrapper around a single chat completion — the SDK runs a real agent loop, calling tools, reading results, deciding what to do next.
 
 ## License
 
-[MIT](LICENSE) — ToruAI 2026
+[MIT](LICENSE) — built by [ToruAI](https://github.com/ToruAI). Fork it, change it, run your own persona.
